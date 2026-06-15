@@ -94,26 +94,34 @@ async def weather(key: str = Query(...), lat: float = Query(45.33), lon: float =
     return ("RAIN " if rain else "OK ") + body
 
 
-@app.get("/news", response_class=PlainTextResponse)
-async def news(key: str = Query(...), q: str = Query("", max_length=140), n: int = Query(2)):
-    if key != PASSWORD:
-        raise HTTPException(status_code=403, detail="bad key")
-    n = max(1, min(n, 4))
-    if q.strip():
-        url = f"https://news.google.com/rss/search?q={quote(q)}&hl=ru&gl=RU&ceid=RU:ru"
-    else:
-        url = "https://news.google.com/rss/headlines/section/geo/Russia?hl=ru&gl=RU&ceid=RU:ru"
-    try:
-        async with httpx.AsyncClient(timeout=12, follow_redirects=True,
-                                     headers={"User-Agent": "Mozilla/5.0"}) as c:
-            root = ET.fromstring((await c.get(url)).text)
-    except Exception:
-        return "ERR новости недоступны"
-    heads = []
+async def _heads(url: str, n: int):
+    async with httpx.AsyncClient(timeout=12, follow_redirects=True,
+                                 headers={"User-Agent": "Mozilla/5.0"}) as c:
+        root = ET.fromstring((await c.get(url)).text)
+    out = []
     for it in root.findall(".//item")[:n]:
         title = html.unescape(it.findtext("title") or "").strip()
         if " - " in title:
             title = title.rsplit(" - ", 1)[0].strip()
         if title:
-            heads.append(title)
+            out.append(title)
+    return out
+
+
+GEN_NEWS = "https://news.google.com/rss/headlines/section/geo/Russia?hl=ru&gl=RU&ceid=RU:ru"
+
+
+@app.get("/news", response_class=PlainTextResponse)
+async def news(key: str = Query(...), q: str = Query("", max_length=140), n: int = Query(2)):
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    n = max(1, min(n, 4))
+    heads = []
+    try:
+        if q.strip():
+            heads = await _heads(f"https://news.google.com/rss/search?q={quote(q)}&hl=ru&gl=RU&ceid=RU:ru", n)
+        if not heads:                       # long sentence search often empty -> fall back to top headlines
+            heads = await _heads(GEN_NEWS, n)
+    except Exception:
+        return "ERR новости недоступны"
     return (". ".join(heads) + ".") if heads else "Новостей не нашлось."
