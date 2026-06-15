@@ -119,6 +119,32 @@ async def _heads(url: str, n: int):
 GEN_NEWS = "https://news.google.com/rss/headlines/section/geo/Russia?hl=ru&gl=RU&ceid=RU:ru"
 
 
+@app.get("/search", response_class=PlainTextResponse)
+async def search(key: str = Query(...), q: str = Query(..., max_length=160)):
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    try:
+        async with httpx.AsyncClient(timeout=12, follow_redirects=True,
+                                     headers={"User-Agent": "Mozilla/5.0"}) as c:
+            d = (await c.get(f"https://api.duckduckgo.com/?q={quote(q)}&format=json&no_html=1&skip_disambig=1&kl=ru-ru")).json()
+        for k in ("Answer", "AbstractText", "Definition"):
+            v = d.get(k)
+            if v:
+                return str(v)[:400]
+        rt = d.get("RelatedTopics") or []
+        if rt and isinstance(rt[0], dict) and rt[0].get("Text"):
+            return str(rt[0]["Text"])[:400]
+    except Exception:
+        pass
+    try:                                   # fallback: fresh news headlines for the query
+        heads = await _heads(f"https://news.google.com/rss/search?q={quote(q)}&hl=ru&gl=RU&ceid=RU:ru", 2)
+        if heads:
+            return ". ".join(heads) + "."
+    except Exception:
+        pass
+    return "Точного ответа не нашла в интернете."
+
+
 @app.get("/news", response_class=PlainTextResponse)
 async def news(key: str = Query(...), q: str = Query("", max_length=140), n: int = Query(2)):
     if key != PASSWORD:
