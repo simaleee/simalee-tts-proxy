@@ -8,6 +8,7 @@ A shared password is required so a leaked URL doesn't burn quota.
 """
 
 import os
+import time as _time
 import html
 import xml.etree.ElementTree as ET
 from urllib.parse import quote
@@ -69,6 +70,13 @@ WMO = {0: "ясно", 1: "облачно", 2: "облачно", 3: "пасмур
        61: "дождь", 63: "дождь", 65: "сильный дождь", 66: "дождь", 67: "дождь",
        71: "снег", 73: "снег", 75: "сильный снег", 77: "снег", 85: "снег", 86: "снег",
        80: "ливень", 81: "ливень", 82: "сильный ливень", 95: "гроза", 96: "гроза", 99: "гроза"}
+
+
+@app.get("/time", response_class=PlainTextResponse)
+def srv_time(key: str = Query(...)):
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    return str(int(_time.time()))   # UTC epoch; the robot has TZ=MSK so getLocalTime() shows Moscow time
 
 
 @app.get("/weather", response_class=PlainTextResponse)
