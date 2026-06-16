@@ -43,7 +43,7 @@ def voices():
 
 @app.get("/tts")
 async def tts(
-    text: str = Query(..., min_length=1, max_length=600),
+    text: str = Query(..., min_length=1, max_length=900),
     key: str = Query(...),
     voice: str = Query(DEFAULT_VOICE),
     rate: str = Query("+0%"),
