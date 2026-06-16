@@ -13,7 +13,7 @@ import html
 import xml.etree.ElementTree as ET
 from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import StreamingResponse, PlainTextResponse
+from fastapi.responses import StreamingResponse, PlainTextResponse, Response
 import edge_tts
 import httpx
 
@@ -55,13 +55,16 @@ async def tts(
     if not voice.startswith("ru-RU-"):
         voice = DEFAULT_VOICE   # force a Russian voice to keep robot consistent
 
-    async def stream():
-        comm = edge_tts.Communicate(text=text, voice=voice, rate=rate, pitch=pitch)
-        async for chunk in comm.stream():
-            if chunk["type"] == "audio":
-                yield chunk["data"]
-
-    return StreamingResponse(stream(), media_type="audio/mpeg")
+    # Generate the WHOLE MP3 first, then send it in one response. Render's free CPU
+    # makes edge-tts slower than real-time; streaming → the robot's player drains its
+    # buffer mid-sentence and cuts off. Sending the complete file lets the robot
+    # download it at network speed and play it from its buffer without underruns.
+    comm = edge_tts.Communicate(text=text, voice=voice, rate=rate, pitch=pitch)
+    audio = bytearray()
+    async for chunk in comm.stream():
+        if chunk["type"] == "audio":
+            audio += chunk["data"]
+    return Response(content=bytes(audio), media_type="audio/mpeg")
 
 
 # ---- internet info for the robot (the ESP can't reach some hosts directly; we fetch server-side) ----
