@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse, PlainTextResponse, Response
 import edge_tts
 import httpx
+import numpy as np
 
 PASSWORD = os.environ.get("TTS_PASSWORD", "Simalee00221922")
 DEFAULT_VOICE = "ru-RU-SvetlanaNeural"   # friendly female; or ru-RU-DmitryNeural for male
@@ -163,6 +164,100 @@ async def search(key: str = Query(...), q: str = Query(..., max_length=160)):
     except Exception:
         pass
     return "Точного ответа не нашла в интернете."
+
+
+# ---- speaker recognition (voiceprint) -------------------------------------------------
+# The ESP can't run a speaker model, so it ships the raw mic PCM here. We compute a small
+# MFCC "voiceprint" (pure numpy, no torch/scipy — fits Render's free 512MB). The robot keeps
+# the enrolled voiceprints on its SD card and sends them back on /identify, so the proxy stays
+# stateless (Render's free disk is wiped on every redeploy). See [[robot-voice-stack]].
+
+def _voiceprint(pcm_bytes, sr=16000, n_mfcc=13, n_filt=26, nfft=512):
+    """Raw 16-bit mono PCM -> 12-dim MFCC mean voiceprint (skips c0/energy). None if too short."""
+    x = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32)
+    if x.size < sr // 3:                      # < ~0.33s of audio -> useless
+        return None
+    x = x / 32768.0
+    x = np.append(x[0], x[1:] - 0.97 * x[:-1])    # pre-emphasis
+    flen, fstep = int(0.025 * sr), int(0.010 * sr)
+    if x.size < flen:
+        return None
+    nfr = 1 + (x.size - flen) // fstep
+    idx = np.arange(flen)[None, :] + fstep * np.arange(nfr)[:, None]
+    frames = x[idx] * np.hamming(flen)
+    pspec = (np.abs(np.fft.rfft(frames, nfft)) ** 2) / nfft     # power spectrum, nfr x (nfft/2+1)
+    # mel filterbank
+    hi = 2595 * np.log10(1 + (sr / 2) / 700)
+    mel = np.linspace(0, hi, n_filt + 2)
+    hz = 700 * (10 ** (mel / 2595) - 1)
+    bins = np.floor((nfft + 1) * hz / sr).astype(int)
+    fbank = np.zeros((n_filt, nfft // 2 + 1))
+    for m in range(1, n_filt + 1):
+        l, c, r = bins[m - 1], bins[m], bins[m + 1]
+        for k in range(l, c):
+            fbank[m - 1, k] = (k - l) / (c - l + 1e-9)
+        for k in range(c, r):
+            fbank[m - 1, k] = (r - k) / (r - c + 1e-9)
+    feat = np.log(np.maximum(np.dot(pspec, fbank.T), 1e-10))    # nfr x n_filt
+    # DCT-II -> MFCC
+    dct = np.cos(np.pi * np.arange(n_mfcc)[None, :] * (2 * np.arange(n_filt)[:, None] + 1) / (2 * n_filt))
+    mfcc = np.dot(feat, dct)                  # nfr x n_mfcc
+    # voice-activity: keep only louder frames (drop silence/breaths) for a stable print
+    energy = pspec.sum(axis=1)
+    voiced = energy > energy.mean() * 0.35
+    if voiced.sum() >= 5:
+        mfcc = mfcc[voiced]
+    return mfcc[:, 1:].mean(axis=0)           # 12-dim timbre print (skip c0 = volume)
+
+
+def _parse_profiles(prof):
+    """'name:v1,v2,...;name2:...' -> [(name, np.array)]"""
+    out = []
+    for entry in prof.split(";"):
+        if ":" not in entry:
+            continue
+        name, vec = entry.split(":", 1)
+        name = name.strip()
+        try:
+            v = np.array([float(t) for t in vec.split(",") if t != ""])
+        except ValueError:
+            continue
+        if name and v.size:
+            out.append((name, v))
+    return out
+
+
+@app.post("/enroll", response_class=PlainTextResponse)
+async def enroll(request: Request, key: str = Query(...)):
+    """POST raw 16k mono PCM -> comma-joined voiceprint the robot stores on SD."""
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    vp = _voiceprint(await request.body())
+    if vp is None:
+        return "ERR short"
+    return ",".join(f"{v:.3f}" for v in vp)
+
+
+@app.post("/identify", response_class=PlainTextResponse)
+async def identify(request: Request, key: str = Query(...),
+                   prof: str = Query("", max_length=4000),
+                   thr: float = Query(11.0)):
+    """POST raw PCM + ?prof=enrolled profiles -> 'name|distance'. Distance>thr => 'unknown'."""
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    vp = _voiceprint(await request.body())
+    if vp is None:
+        return "unknown|0"
+    best_name, best_d = "unknown", 1e9
+    for name, pv in _parse_profiles(prof):
+        if pv.shape != vp.shape:
+            continue
+        d = float(np.linalg.norm(vp - pv))    # euclidean over 12 MFCC means
+        if d < best_d:
+            best_d, best_name = d, name
+    if best_d > thr:
+        return f"unknown|{best_d:.2f}"
+    return f"{best_name}|{best_d:.2f}"
 
 
 @app.get("/news", response_class=PlainTextResponse)
