@@ -12,7 +12,7 @@ import time as _time
 import html
 import xml.etree.ElementTree as ET
 from urllib.parse import quote
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse, PlainTextResponse, Response
 import edge_tts
 import httpx
@@ -73,6 +73,23 @@ WMO = {0: "ясно", 1: "облачно", 2: "облачно", 3: "пасмур
        61: "дождь", 63: "дождь", 65: "сильный дождь", 66: "дождь", 67: "дождь",
        71: "снег", 73: "снег", 75: "сильный снег", 77: "снег", 85: "снег", 86: "снег",
        80: "ливень", 81: "ливень", 82: "сильный ливень", 95: "гроза", 96: "гроза", 99: "гроза"}
+
+
+@app.post("/gemini")
+async def gemini_relay(request: Request, key: str = Query(...), model: str = Query("gemini-2.0-flash")):
+    # Relay the robot's Gemini request to Google. Render isn't geo-blocked from Google, so this
+    # works from Russia without a VPN. The API key travels in the x-goog-api-key header (not stored here).
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    gk = request.headers.get("x-goog-api-key", "")
+    body = await request.body()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(url, headers={"x-goog-api-key": gk, "Content-Type": "application/json"}, content=body)
+        return Response(content=r.content, media_type="application/json", status_code=r.status_code)
+    except Exception:
+        return Response(content=b'{"error":"relay failed"}', media_type="application/json", status_code=502)
 
 
 @app.get("/time", response_class=PlainTextResponse)
