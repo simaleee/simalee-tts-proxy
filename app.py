@@ -264,29 +264,70 @@ async def identify(request: Request, key: str = Query(...),
 # Browser (any network) -> /remote page -> /say_remote (queue a phrase) + /status_remote (read live status).
 # Robot (polls every ~5s) -> /robot_poll (fetch a queued phrase) + /robot_status (push its state).
 # In-memory only: Render free is a single instance; the queue resets on redeploy/sleep — fine for a mailbox.
-REMOTE_SAY = []          # phrases queued for the robot to speak
+REMOTE_CMD = []          # queue for the robot: [{"mode":"say"|"chat","text":...}]
+REMOTE_OUT = []          # the chat thread: [{"id":n,"from":"you"|"robot","text":...,"t":epoch}]
+REMOTE_OUT_ID = 0        # monotonic message id (page tracks the last it has seen)
 REMOTE_STATUS = {}       # last status the robot pushed (temp, hum, battery, ...)
 REMOTE_TS = 0.0          # epoch of the robot's last check-in (poll or status)
 
 
+def _out_add(frm, text):
+    global REMOTE_OUT_ID
+    text = (text or "").strip()
+    if not text:
+        return
+    REMOTE_OUT_ID += 1
+    REMOTE_OUT.append({"id": REMOTE_OUT_ID, "from": frm, "text": text[:600], "t": int(_time.time())})
+    del REMOTE_OUT[:-40]                       # keep the last 40 messages
+
+
 @app.get("/say_remote", response_class=PlainTextResponse)
 def say_remote(key: str = Query(...), text: str = Query(..., max_length=300)):
+    # speak this aloud AT HOME (the original feature)
     if key != PASSWORD:
         raise HTTPException(status_code=403, detail="bad key")
     t = text.strip()
     if t:
-        REMOTE_SAY.append(t)
-        del REMOTE_SAY[:-10]                 # cap the queue at the last 10
+        REMOTE_CMD.append({"mode": "say", "text": t})
+        del REMOTE_CMD[:-10]
+    return "ok"
+
+
+@app.get("/chat_remote", response_class=PlainTextResponse)
+def chat_remote(key: str = Query(...), text: str = Query(..., max_length=600)):
+    # TEXT chat: shows in the thread + the robot replies in text (its full AI brain)
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    t = text.strip()
+    if t:
+        _out_add("you", t)
+        REMOTE_CMD.append({"mode": "chat", "text": t})
+        del REMOTE_CMD[:-10]
     return "ok"
 
 
 @app.get("/robot_poll", response_class=PlainTextResponse)
 def robot_poll(key: str = Query(...)):
+    # robot fetches one queued command -> "mode|text" (split on the FIRST '|')
     if key != PASSWORD:
         raise HTTPException(status_code=403, detail="bad key")
     global REMOTE_TS
-    REMOTE_TS = _time.time()                  # polling => robot is alive
-    return REMOTE_SAY.pop(0) if REMOTE_SAY else ""
+    REMOTE_TS = _time.time()                   # polling => robot is alive
+    if REMOTE_CMD:
+        c = REMOTE_CMD.pop(0)
+        return c["mode"] + "|" + c["text"]
+    return ""
+
+
+@app.get("/robot_msg", response_class=PlainTextResponse)
+def robot_msg(key: str = Query(...), text: str = Query(..., max_length=600)):
+    # robot posts an outbound message (a chat reply OR a fired reminder) into the thread
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    global REMOTE_TS
+    _out_add("robot", text)
+    REMOTE_TS = _time.time()
+    return "ok"
 
 
 @app.get("/robot_status", response_class=PlainTextResponse)
@@ -306,74 +347,93 @@ def status_remote(key: str = Query(...)):
     if key != PASSWORD:
         raise HTTPException(status_code=403, detail="bad key")
     age = int(_time.time() - REMOTE_TS) if REMOTE_TS else -1
-    return JSONResponse({"age": age, "pending": len(REMOTE_SAY), **REMOTE_STATUS})
+    return JSONResponse({"age": age, "pending": len(REMOTE_CMD), **REMOTE_STATUS})
+
+
+@app.get("/outbox_remote")
+def outbox_remote(key: str = Query(...), since: int = Query(0)):
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    msgs = [m for m in REMOTE_OUT if m["id"] > since]
+    return JSONResponse({"msgs": msgs, "last": REMOTE_OUT_ID})
 
 
 REMOTE_HTML = """<!doctype html><html lang=ru><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1"><title>Simalee — связь</title>
 <style>
-:root{--ink:#eef;--bg:#0e1230;--card:#171c44;--line:#2a316a;--gold:#e9c46a;--red:#e15b4c;--grn:#4cc78a;--mut:#8a93c8}
-*{box-sizing:border-box}body{margin:0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:linear-gradient(160deg,#0b0e26,#141a44);color:var(--ink);min-height:100vh;padding:16px}
-.wrap{max-width:460px;margin:0 auto}
-h1{font-size:20px;margin:4px 0 14px;letter-spacing:.5px}h1 b{color:var(--gold)}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:14px}
-.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:7px;vertical-align:middle}
-.row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #ffffff10;font-size:15px}
-.row:last-child{border:0}.row .k{color:var(--mut)}.row .v{font-weight:600}
-input{width:100%;padding:12px;border-radius:12px;border:1px solid var(--line);background:#0c1030;color:var(--ink);font-size:16px}
-button{width:100%;padding:13px;margin-top:10px;border:0;border-radius:12px;background:var(--gold);color:#1a1530;font-weight:700;font-size:16px}
-button:active{transform:scale(.98)}.sub{color:var(--mut);font-size:13px;margin-top:8px}
-.big{font-size:17px;font-weight:700}
+:root{--ink:#eef;--card:#171c44;--line:#2a316a;--gold:#e9c46a;--mut:#8a93c8}
+*{box-sizing:border-box}html,body{height:100%}
+body{margin:0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:linear-gradient(160deg,#0b0e26,#141a44);color:var(--ink);display:flex;flex-direction:column;height:100dvh}
+.wrap{max-width:480px;width:100%;margin:0 auto;display:flex;flex-direction:column;height:100%;padding:10px}
+h1{font-size:17px;margin:2px 4px 8px}h1 b{color:var(--gold)}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}
+.bar{font-size:13px;color:var(--mut);background:#141a3e;border:1px solid var(--line);border-radius:12px;padding:8px 11px;margin-bottom:8px;cursor:pointer}
+.det{font-size:13px;color:var(--mut);margin-top:6px;display:none}.det.open{display:block}
+.det span{display:inline-block;margin-right:12px}
+#thread{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:4px}
+.msg{max-width:82%;padding:9px 12px;border-radius:14px;font-size:15px;line-height:1.35;word-wrap:break-word}
+.you{align-self:flex-end;background:var(--gold);color:#1a1530;border-bottom-right-radius:4px}
+.rob{align-self:flex-start;background:var(--card);border:1px solid var(--line);border-bottom-left-radius:4px}
+.msg .tm{display:block;font-size:10px;opacity:.6;margin-top:3px}
+.hint{align-self:center;color:var(--mut);font-size:12px;padding:6px}
+.compose{display:flex;gap:7px;padding-top:8px}
+input{flex:1;padding:12px;border-radius:12px;border:1px solid var(--line);background:#0c1030;color:var(--ink);font-size:16px}
+.snd{padding:0 15px;border:0;border-radius:12px;background:var(--gold);color:#1a1530;font-weight:700;font-size:18px}
+.snd:active{transform:scale(.95)}.say{background:#23306a;color:var(--ink)}
+.kc{margin:auto;max-width:340px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px}
+.kc input{width:100%;margin:10px 0}.kc button{width:100%;padding:12px;border:0;border-radius:12px;background:var(--gold);color:#1a1530;font-weight:700;font-size:16px}
 </style></head><body><div class=wrap>
-<h1>сяма<b>лии</b> · связь</h1>
-<div class=card id=keycard style=display:none>
-  <div class=sub>Пароль доступа (один раз):</div>
+<div class=kc id=keycard style=display:none>
+  <div>Пароль доступа (один раз):</div>
   <input id=key type=password placeholder=пароль>
   <button onclick=saveKey()>Войти</button>
 </div>
-<div id=app style=display:none>
-  <div class=card>
-    <div class=big id=online>…</div>
-    <div class=row><span class=k>🌡 Температура</span><span class=v id=t>—</span></div>
-    <div class=row><span class=k>💧 Влажность</span><span class=v id=h>—</span></div>
-    <div class=row><span class=k>🔋 Батарея</span><span class=v id=bat>—</span></div>
-    <div class=row><span class=k>🎙 Слышит</span><span class=v id=spk>—</span></div>
-    <div class=row><span class=k>💤 Состояние</span><span class=v id=slp>—</span></div>
-    <div class=row><span class=k>🔊 Громкость / мик</span><span class=v id=vm>—</span></div>
-    <div class=row><span class=k>⏱ Аптайм</span><span class=v id=up>—</span></div>
-    <div class=row><span class=k>🌐 IP в доме</span><span class=v id=ip>—</span></div>
+<div id=app style="display:none;flex-direction:column;height:100%">
+  <h1>сяма<b>лии</b> · чат</h1>
+  <div class=bar id=bar onclick="document.getElementById('det').classList.toggle('open')">
+    <span id=online>…</span>
+    <div class=det id=det>
+      <span>🌡 <b id=t>—</b></span><span>💧 <b id=h>—</b></span><span>🔋 <b id=bat>—</b></span>
+      <span>🎙 <b id=spk>—</b></span><span>💤 <b id=slp>—</b></span><span>🔊 <b id=vm>—</b></span>
+      <span>⏱ <b id=up>—</b></span><span>🌐 <b id=ip>—</b></span>
+    </div>
   </div>
-  <div class=card>
-    <div class=sub>Робот скажет это вслух дома:</div>
-    <input id=say placeholder="Например: Я скоро буду дома">
-    <button onclick=sendSay()>📢 Сказать</button>
-    <div class=sub id=said></div>
+  <div id=thread><div class=hint>Напиши роботу — он ответит. Напоминания он пришлёт сюда сам.</div></div>
+  <div class=compose>
+    <input id=say placeholder="Сообщение роботу…" onkeydown="if(event.key=='Enter')sendChat()">
+    <button class=snd title="Сказать вслух дома" onclick=sendSay()>📢</button>
+    <button class=snd onclick=sendChat()>➤</button>
   </div>
 </div>
 <script>
-let KEY=localStorage.getItem('simkey')||'';
-function show(){document.getElementById('keycard').style.display=KEY?'none':'block';document.getElementById('app').style.display=KEY?'block':'none';}
-function saveKey(){KEY=document.getElementById('key').value.trim();localStorage.setItem('simkey',KEY);show();tick();}
+let KEY=localStorage.getItem('simkey')||'',LAST=0,seen={};
+function show(){document.getElementById('keycard').style.display=KEY?'none':'flex';document.getElementById('app').style.display=KEY?'flex':'none';}
+function saveKey(){KEY=document.getElementById('key').value.trim();localStorage.setItem('simkey',KEY);show();poll();status();}
 function fmtUp(s){s=+s||0;let h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?h+'ч '+m+'м':m+'м';}
-async function tick(){if(!KEY)return;
- try{let r=await fetch('/status_remote?key='+encodeURIComponent(KEY));
+function add(m){if(seen[m.id])return;seen[m.id]=1;
+ let th=document.getElementById('thread'),h=th.querySelector('.hint');if(h)h.remove();
+ let d=document.createElement('div');d.className='msg '+(m.from=='you'?'you':'rob');
+ let tm=new Date((m.t||0)*1000).toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'});
+ d.innerHTML='';d.textContent=m.text;let s=document.createElement('span');s.className='tm';s.textContent=tm;d.appendChild(s);
+ th.appendChild(d);th.scrollTop=th.scrollHeight;}
+async function poll(){if(!KEY)return;
+ try{let r=await fetch('/outbox_remote?key='+encodeURIComponent(KEY)+'&since='+LAST);
   if(r.status==403){localStorage.removeItem('simkey');KEY='';show();return;}
-  let d=await r.json();
+  let d=await r.json();(d.msgs||[]).forEach(add);LAST=d.last||LAST;}catch(e){}}
+async function status(){if(!KEY)return;
+ try{let d=await (await fetch('/status_remote?key='+encodeURIComponent(KEY))).json();
   let on=d.age>=0&&d.age<14;
-  document.getElementById('online').innerHTML='<span class=dot style="background:'+(on?'#4cc78a':'#e15b4c')+'"></span>'+(on?'На связи':(d.age<0?'Ещё не выходил на связь':'Не отвечает ('+d.age+'с назад)'));
-  document.getElementById('t').textContent=(d.t&&d.t!='-99')?d.t+' °C':'—';
-  document.getElementById('h').textContent=(d.h&&d.h!='-99')?d.h+' %':'—';
-  document.getElementById('bat').textContent=(d.bat&&d.bat!='-1')?d.bat+' %':'от сети';
-  document.getElementById('spk').textContent=(d.spk&&d.spk!='-')?d.spk:'—';
-  document.getElementById('slp').textContent=(d.slp=='1')?'спит':'бодрствует';
-  document.getElementById('vm').textContent=(d.vol||'?')+' / '+(d.mic||'?')+'%';
-  document.getElementById('up').textContent=fmtUp(d.up);
-  document.getElementById('ip').textContent=d.ip||'—';
- }catch(e){}}
-async function sendSay(){let el=document.getElementById('say'),t=el.value.trim();if(!t)return;
- await fetch('/say_remote?key='+encodeURIComponent(KEY)+'&text='+encodeURIComponent(t));
- el.value='';document.getElementById('said').textContent='Отправлено: «'+t+'» — робот скажет в течение ~5 секунд.';}
-show();tick();setInterval(tick,3000);
+  document.getElementById('online').innerHTML='<span class=dot style="background:'+(on?'#4cc78a':'#e15b4c')+'"></span>'+(on?'На связи':(d.age<0?'Ещё не выходил на связь':'Был '+d.age+'с назад'));
+  t.textContent=(d.t&&d.t!='-99')?d.t+'°C':'—';h.textContent=(d.h&&d.h!='-99')?d.h+'%':'—';
+  bat.textContent=(d.bat&&d.bat!='-1')?d.bat+'%':'сеть';spk.textContent=(d.spk&&d.spk!='-')?d.spk:'—';
+  slp.textContent=(d.slp=='1')?'спит':'не спит';vm.textContent=(d.vol||'?')+'/'+(d.mic||'?')+'%';
+  up.textContent=fmtUp(d.up);ip.textContent=d.ip||'—';}catch(e){}}
+async function sendChat(){let el=document.getElementById('say'),x=el.value.trim();if(!x)return;el.value='';
+ await fetch('/chat_remote?key='+encodeURIComponent(KEY)+'&text='+encodeURIComponent(x));poll();}
+async function sendSay(){let el=document.getElementById('say'),x=el.value.trim();if(!x)return;el.value='';
+ await fetch('/say_remote?key='+encodeURIComponent(KEY)+'&text='+encodeURIComponent(x));
+ add({id:'l'+Date.now(),from:'you',text:'📢 (вслух дома) '+x,t:Date.now()/1000});}
+show();poll();status();setInterval(poll,2500);setInterval(status,4000);
 </script></div></body></html>"""
 
 
