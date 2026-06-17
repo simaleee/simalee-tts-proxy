@@ -380,12 +380,16 @@ h1{font-size:17px;margin:2px 4px 8px}h1 b{color:var(--gold)}
 input{flex:1;padding:12px;border-radius:12px;border:1px solid var(--line);background:#0c1030;color:var(--ink);font-size:16px}
 .snd{padding:0 15px;border:0;border-radius:12px;background:var(--gold);color:#1a1530;font-weight:700;font-size:18px}
 .snd:active{transform:scale(.95)}.say{background:#23306a;color:var(--ink)}
-.kc{margin:auto;max-width:340px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px}
-.kc input{width:100%;margin:10px 0}.kc button{width:100%;padding:12px;border:0;border-radius:12px;background:var(--gold);color:#1a1530;font-weight:700;font-size:16px}
+.kc{margin:auto;width:88%;max-width:330px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;text-align:center}
+.kc h2{margin:0 0 4px;font-size:20px}.kc h2 b{color:var(--gold)}
+.kc p{margin:0 0 14px;color:var(--mut);font-size:13px}
+.kc input{width:100%;display:block;padding:14px;margin:0 0 12px;border-radius:12px;border:1px solid var(--line);background:#0c1030;color:var(--ink);font-size:16px}
+.kc button{width:100%;padding:14px;border:0;border-radius:12px;background:var(--gold);color:#1a1530;font-weight:700;font-size:16px}
 </style></head><body><div class=wrap>
 <div class=kc id=keycard style=display:none>
-  <div>Пароль доступа (один раз):</div>
-  <input id=key type=password placeholder=пароль>
+  <h2>сяма<b>лии</b></h2>
+  <p>Введи пароль доступа (один раз)</p>
+  <input id=key type=password placeholder="пароль" autocomplete="current-password" onkeydown="if(event.key=='Enter')saveKey()">
   <button onclick=saveKey()>Войти</button>
 </div>
 <div id=app style="display:none;flex-direction:column;height:100%">
@@ -407,7 +411,7 @@ input{flex:1;padding:12px;border-radius:12px;border:1px solid var(--line);backgr
 </div>
 <script>
 let KEY=localStorage.getItem('simkey')||'',LAST=0,seen={};
-function show(){document.getElementById('keycard').style.display=KEY?'none':'flex';document.getElementById('app').style.display=KEY?'flex':'none';}
+function show(){document.getElementById('keycard').style.display=KEY?'none':'block';document.getElementById('app').style.display=KEY?'flex':'none';}
 function saveKey(){KEY=document.getElementById('key').value.trim();localStorage.setItem('simkey',KEY);show();poll();status();}
 function fmtUp(s){s=+s||0;let h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?h+'ч '+m+'м':m+'м';}
 function add(m){if(seen[m.id])return;seen[m.id]=1;
