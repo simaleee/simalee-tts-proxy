@@ -13,7 +13,7 @@ import html
 import xml.etree.ElementTree as ET
 from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse, PlainTextResponse, Response
+from fastapi.responses import StreamingResponse, PlainTextResponse, Response, JSONResponse, HTMLResponse
 import edge_tts
 import httpx
 import numpy as np
@@ -258,6 +258,128 @@ async def identify(request: Request, key: str = Query(...),
     if best_d > thr:
         return f"unknown|{best_d:.2f}"
     return f"{best_name}|{best_d:.2f}"
+
+
+# ---- remote link: a tiny mailbox so the user can reach the robot from ANYWHERE (no Telegram, no port-forward) ----
+# Browser (any network) -> /remote page -> /say_remote (queue a phrase) + /status_remote (read live status).
+# Robot (polls every ~5s) -> /robot_poll (fetch a queued phrase) + /robot_status (push its state).
+# In-memory only: Render free is a single instance; the queue resets on redeploy/sleep — fine for a mailbox.
+REMOTE_SAY = []          # phrases queued for the robot to speak
+REMOTE_STATUS = {}       # last status the robot pushed (temp, hum, battery, ...)
+REMOTE_TS = 0.0          # epoch of the robot's last check-in (poll or status)
+
+
+@app.get("/say_remote", response_class=PlainTextResponse)
+def say_remote(key: str = Query(...), text: str = Query(..., max_length=300)):
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    t = text.strip()
+    if t:
+        REMOTE_SAY.append(t)
+        del REMOTE_SAY[:-10]                 # cap the queue at the last 10
+    return "ok"
+
+
+@app.get("/robot_poll", response_class=PlainTextResponse)
+def robot_poll(key: str = Query(...)):
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    global REMOTE_TS
+    REMOTE_TS = _time.time()                  # polling => robot is alive
+    return REMOTE_SAY.pop(0) if REMOTE_SAY else ""
+
+
+@app.get("/robot_status", response_class=PlainTextResponse)
+def robot_status(request: Request, key: str = Query(...)):
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    global REMOTE_STATUS, REMOTE_TS
+    st = dict(request.query_params)
+    st.pop("key", None)
+    REMOTE_STATUS = st
+    REMOTE_TS = _time.time()
+    return "ok"
+
+
+@app.get("/status_remote")
+def status_remote(key: str = Query(...)):
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    age = int(_time.time() - REMOTE_TS) if REMOTE_TS else -1
+    return JSONResponse({"age": age, "pending": len(REMOTE_SAY), **REMOTE_STATUS})
+
+
+REMOTE_HTML = """<!doctype html><html lang=ru><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>Simalee — связь</title>
+<style>
+:root{--ink:#eef;--bg:#0e1230;--card:#171c44;--line:#2a316a;--gold:#e9c46a;--red:#e15b4c;--grn:#4cc78a;--mut:#8a93c8}
+*{box-sizing:border-box}body{margin:0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:linear-gradient(160deg,#0b0e26,#141a44);color:var(--ink);min-height:100vh;padding:16px}
+.wrap{max-width:460px;margin:0 auto}
+h1{font-size:20px;margin:4px 0 14px;letter-spacing:.5px}h1 b{color:var(--gold)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:14px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:7px;vertical-align:middle}
+.row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #ffffff10;font-size:15px}
+.row:last-child{border:0}.row .k{color:var(--mut)}.row .v{font-weight:600}
+input{width:100%;padding:12px;border-radius:12px;border:1px solid var(--line);background:#0c1030;color:var(--ink);font-size:16px}
+button{width:100%;padding:13px;margin-top:10px;border:0;border-radius:12px;background:var(--gold);color:#1a1530;font-weight:700;font-size:16px}
+button:active{transform:scale(.98)}.sub{color:var(--mut);font-size:13px;margin-top:8px}
+.big{font-size:17px;font-weight:700}
+</style></head><body><div class=wrap>
+<h1>сяма<b>лии</b> · связь</h1>
+<div class=card id=keycard style=display:none>
+  <div class=sub>Пароль доступа (один раз):</div>
+  <input id=key type=password placeholder=пароль>
+  <button onclick=saveKey()>Войти</button>
+</div>
+<div id=app style=display:none>
+  <div class=card>
+    <div class=big id=online>…</div>
+    <div class=row><span class=k>🌡 Температура</span><span class=v id=t>—</span></div>
+    <div class=row><span class=k>💧 Влажность</span><span class=v id=h>—</span></div>
+    <div class=row><span class=k>🔋 Батарея</span><span class=v id=bat>—</span></div>
+    <div class=row><span class=k>🎙 Слышит</span><span class=v id=spk>—</span></div>
+    <div class=row><span class=k>💤 Состояние</span><span class=v id=slp>—</span></div>
+    <div class=row><span class=k>🔊 Громкость / мик</span><span class=v id=vm>—</span></div>
+    <div class=row><span class=k>⏱ Аптайм</span><span class=v id=up>—</span></div>
+    <div class=row><span class=k>🌐 IP в доме</span><span class=v id=ip>—</span></div>
+  </div>
+  <div class=card>
+    <div class=sub>Робот скажет это вслух дома:</div>
+    <input id=say placeholder="Например: Я скоро буду дома">
+    <button onclick=sendSay()>📢 Сказать</button>
+    <div class=sub id=said></div>
+  </div>
+</div>
+<script>
+let KEY=localStorage.getItem('simkey')||'';
+function show(){document.getElementById('keycard').style.display=KEY?'none':'block';document.getElementById('app').style.display=KEY?'block':'none';}
+function saveKey(){KEY=document.getElementById('key').value.trim();localStorage.setItem('simkey',KEY);show();tick();}
+function fmtUp(s){s=+s||0;let h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?h+'ч '+m+'м':m+'м';}
+async function tick(){if(!KEY)return;
+ try{let r=await fetch('/status_remote?key='+encodeURIComponent(KEY));
+  if(r.status==403){localStorage.removeItem('simkey');KEY='';show();return;}
+  let d=await r.json();
+  let on=d.age>=0&&d.age<14;
+  document.getElementById('online').innerHTML='<span class=dot style="background:'+(on?'#4cc78a':'#e15b4c')+'"></span>'+(on?'На связи':(d.age<0?'Ещё не выходил на связь':'Не отвечает ('+d.age+'с назад)'));
+  document.getElementById('t').textContent=(d.t&&d.t!='-99')?d.t+' °C':'—';
+  document.getElementById('h').textContent=(d.h&&d.h!='-99')?d.h+' %':'—';
+  document.getElementById('bat').textContent=(d.bat&&d.bat!='-1')?d.bat+' %':'от сети';
+  document.getElementById('spk').textContent=(d.spk&&d.spk!='-')?d.spk:'—';
+  document.getElementById('slp').textContent=(d.slp=='1')?'спит':'бодрствует';
+  document.getElementById('vm').textContent=(d.vol||'?')+' / '+(d.mic||'?')+'%';
+  document.getElementById('up').textContent=fmtUp(d.up);
+  document.getElementById('ip').textContent=d.ip||'—';
+ }catch(e){}}
+async function sendSay(){let el=document.getElementById('say'),t=el.value.trim();if(!t)return;
+ await fetch('/say_remote?key='+encodeURIComponent(KEY)+'&text='+encodeURIComponent(t));
+ el.value='';document.getElementById('said').textContent='Отправлено: «'+t+'» — робот скажет в течение ~5 секунд.';}
+show();tick();setInterval(tick,3000);
+</script></div></body></html>"""
+
+
+@app.get("/remote", response_class=HTMLResponse)
+def remote_page():
+    return REMOTE_HTML
 
 
 @app.get("/news", response_class=PlainTextResponse)
