@@ -399,7 +399,7 @@ input{flex:1;padding:12px;border-radius:12px;border:1px solid var(--line);backgr
     <div class=det id=det>
       <span>🌡 <b id=t>—</b></span><span>💧 <b id=h>—</b></span><span>🔋 <b id=bat>—</b></span>
       <span>🎙 <b id=spk>—</b></span><span>💤 <b id=slp>—</b></span><span>🔊 <b id=vm>—</b></span>
-      <span>⏱ <b id=up>—</b></span><span>🌐 <b id=ip>—</b></span>
+      <span>⚡ <b id=en>—</b></span><span>⏱ <b id=up>—</b></span><span>🌐 <b id=ip>—</b></span>
     </div>
   </div>
   <div id=thread><div class=hint>Напиши роботу — он ответит. Напоминания он пришлёт сюда сам.</div></div>
@@ -431,6 +431,7 @@ async function status(){if(!KEY)return;
   t.textContent=(d.t&&d.t!='-99')?d.t+'°C':'—';h.textContent=(d.h&&d.h!='-99')?d.h+'%':'—';
   bat.textContent=(d.bat&&d.bat!='-1')?d.bat+'%':'сеть';spk.textContent=(d.spk&&d.spk!='-')?d.spk:'—';
   slp.textContent=(d.slp=='1')?'спит':'не спит';vm.textContent=(d.vol||'?')+'/'+(d.mic||'?')+'%';
+  en.textContent=(d.en!=null&&d.en!=='')?d.en+'%':'—';
   up.textContent=fmtUp(d.up);ip.textContent=d.ip||'—';}catch(e){}}
 async function sendChat(){let el=document.getElementById('say'),x=el.value.trim();if(!x)return;el.value='';
  await fetch('/chat_remote?key='+encodeURIComponent(KEY)+'&text='+encodeURIComponent(x));poll();}
