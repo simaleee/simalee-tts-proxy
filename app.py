@@ -611,7 +611,8 @@ select{width:100%;padding:10px;border-radius:10px;background:#0c1030;color:var(-
   </div>
   <div class=card>
     <div class=big>🔔 Уведомления на телефон</div>
-    <div style="color:var(--mut);font-size:13px;margin-bottom:10px" id=pushst>Включи, чтобы напоминания и сообщения робота приходили в шторку (даже когда приложение закрыто).</div>
+    <div style="color:var(--mut);font-size:13px;margin-bottom:8px" id=pushst>Включи, чтобы напоминания приходили в шторку (даже когда приложение закрыто).</div>
+    <div style="font-family:monospace;font-size:11px;color:#9aa3d6;background:#0c1030;border-radius:8px;padding:6px 8px;margin-bottom:10px" id=pushdiag>диагностика…</div>
     <button style="width:100%;padding:13px;border:0;border-radius:12px;background:var(--gold);color:#1a1530;font-weight:700;font-size:16px" onclick=enablePush()>Включить уведомления</button>
     <button style="width:100%;padding:11px;margin-top:8px;border:0;border-radius:12px;background:#23306a;color:#fff;font-size:15px" onclick=testPush()>Проверить (тест)</button>
     <label style="display:block;margin-top:12px;color:var(--mut);font-size:13px">🖼 Своя иконка уведомлений:</label>
@@ -673,7 +674,15 @@ async function testPush(){try{let r=await(await fetch('/push?key='+encodeURIComp
 }catch(e){pushst.textContent='Ошибка теста: '+e;}}
 async function uploadIcon(){let f=document.getElementById('iconf').files[0];if(!f)return;try{let b=await f.arrayBuffer();let r=await fetch('/set_icon?key='+encodeURIComponent(KEY),{method:'POST',body:b});pushst.textContent=r.ok?'✅ Иконка установлена — появится в следующем уведомлении.':'Не удалось загрузить иконку.';}catch(e){pushst.textContent='Ошибка иконки: '+e;}}
 async function pushStatus(){try{let r=await(await fetch('/push_count?key='+encodeURIComponent(KEY))).json();if(r.subs>0)pushst.textContent='✅ Подписано устройств: '+r.subs+'. Напоминания придут в шторку.';}catch(e){}}
-show();tick();if(KEY)pushStatus();setInterval(tick,3000);
+function pushDiag(){try{
+ let sw=('serviceWorker'in navigator), pm=('PushManager'in window);
+ let perm=(window.Notification?Notification.permission:'нет Notification');
+ let inst=(matchMedia('(display-mode: standalone)').matches||navigator.standalone)?'да':'НЕТ(в браузере)';
+ let el=document.getElementById('pushdiag');
+ if(el)el.textContent='SW:'+(sw?'да':'НЕТ')+' · Push:'+(pm?'да':'НЕТ')+' · Разрешение:'+perm+' · Установлено:'+inst;
+}catch(e){}}
+window.addEventListener('error',ev=>{let el=document.getElementById('pushdiag');if(el)el.textContent='JS-ошибка: '+(ev.message||ev);});
+show();tick();if(KEY){pushStatus();pushDiag();}setInterval(tick,3000);
 </script></div></body></html>"""
 
 
