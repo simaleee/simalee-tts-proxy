@@ -93,6 +93,23 @@ async def gemini_relay(request: Request, key: str = Query(...), model: str = Que
         return Response(content=b'{"error":"relay failed"}', media_type="application/json", status_code=502)
 
 
+@app.post("/groq")
+async def groq_relay(request: Request, key: str = Query(...)):
+    # Relay the robot's chat request to Groq (OpenAI-compatible). Groq = fast (LPU) + a generous free tier.
+    # The API key travels in the Authorization header (not stored here). Render(US) -> Groq has no geo issue.
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    auth = request.headers.get("authorization", "")
+    body = await request.body()
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post("https://api.groq.com/openai/v1/chat/completions",
+                             headers={"Authorization": auth, "Content-Type": "application/json"}, content=body)
+        return Response(content=r.content, media_type="application/json", status_code=r.status_code)
+    except Exception:
+        return Response(content=b'{"error":"relay failed"}', media_type="application/json", status_code=502)
+
+
 @app.get("/time", response_class=PlainTextResponse)
 def srv_time(key: str = Query(...)):
     if key != PASSWORD:
