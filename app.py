@@ -535,7 +535,7 @@ def manifest():
     }, media_type="application/manifest+json")
 
 
-@app.get("/app/sw.js")
+@app.get("/sw.js")
 def service_worker():
     js = (
         "self.addEventListener('install',e=>self.skipWaiting());"
@@ -655,7 +655,10 @@ async function tick(){if(!KEY)return;
 function sv(id,lab,v,suf){if(v==null||v==='')return;let el=document.getElementById(id);if(el!==document.activeElement){el.value=v;document.getElementById(lab).textContent=v+suf;}}
 function tgset(id,v){document.getElementById(id).classList.toggle('on',v=='1'||v===1||v===true||v==='true');}
 document.addEventListener('input',e=>{if(e.target.type=='range')touched=Date.now();},true);
-if('serviceWorker'in navigator)navigator.serviceWorker.register('/app/sw.js');
+if('serviceWorker'in navigator){
+ navigator.serviceWorker.getRegistrations().then(rs=>{for(const r of rs){if(r.scope.endsWith('/app/'))r.unregister();}});
+ navigator.serviceWorker.register('/sw.js').then(r=>r.update()).catch(e=>{let el=document.getElementById('pushdiag');if(el)el.textContent='SW register error: '+e;});
+}
 function urlB64(s){let p='='.repeat((4-s.length%4)%4);let b=atob((s+p).replace(/-/g,'+').replace(/_/g,'/'));return Uint8Array.from([...b].map(c=>c.charCodeAt(0)));}
 async function enablePush(){try{
  pushst.textContent='Проверяю поддержку…';
