@@ -15,10 +15,12 @@ from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse, PlainTextResponse, Response, JSONResponse, HTMLResponse
 import io
+import json as _json
 import edge_tts
 import httpx
 import numpy as np
 from PIL import Image, ImageDraw
+from pywebpush import webpush, WebPushException
 
 PASSWORD = os.environ.get("TTS_PASSWORD", "Simalee00221922")
 DEFAULT_VOICE = "ru-RU-SvetlanaNeural"   # friendly female; or ru-RU-DmitryNeural for male
@@ -403,6 +405,56 @@ def settings_poll(key: str = Query(...)):
     return JSONResponse(out)
 
 
+# ---- Web Push notifications (PWA -> phone notification shade, even when app is closed) ----
+VAPID_PUBLIC = "BFdQApV-VGZj4Oy_ZrBp2eo1Jt3XLJkQheGfRNXkMOI132x97YUw_Df98UeCkmb3auW98Mp1uKk1bXjiqROF1sE"
+VAPID_PRIVATE = "gxYrwPWIH2TV4f83an5nyXTKqySWl7JJALlyCxqSmfg"
+VAPID_SUB = "mailto:bobekmunyer619@gmail.com"
+PUSH_SUBS = []           # web-push subscriptions from the PWA (in-memory; user re-subscribes by opening the app)
+
+
+@app.get("/vapid_public", response_class=PlainTextResponse)
+def vapid_public():
+    return VAPID_PUBLIC
+
+
+@app.post("/push_subscribe", response_class=PlainTextResponse)
+async def push_subscribe(request: Request, key: str = Query(...)):
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    sub = await request.json()
+    if sub.get("endpoint") and sub not in PUSH_SUBS:
+        PUSH_SUBS.append(sub)
+        del PUSH_SUBS[:-20]
+    return "ok"
+
+
+def _send_push(text, title="Simalee"):
+    payload = _json.dumps({"title": title, "body": (text or "")[:300]})
+    dead = []
+    for sub in list(PUSH_SUBS):
+        try:
+            webpush(subscription_info=sub, data=payload,
+                    vapid_private_key=VAPID_PRIVATE, vapid_claims={"sub": VAPID_SUB})
+        except WebPushException as e:
+            code = getattr(getattr(e, "response", None), "status_code", None)
+            if code in (404, 410):
+                dead.append(sub)
+        except Exception:
+            pass
+    for d in dead:
+        if d in PUSH_SUBS:
+            PUSH_SUBS.remove(d)
+
+
+@app.get("/push", response_class=PlainTextResponse)
+def push(key: str = Query(...), text: str = Query(..., max_length=300), title: str = Query("Simalee")):
+    # robot (or anything) calls this to push a notification to the phone(s)
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    _send_push(text.strip(), title)
+    return "ok"
+
+
 # ---- installable PWA (status + settings), served at /app ----
 def _make_icon(sz):
     img = Image.new("RGB", (sz, sz), (14, 18, 48))
@@ -445,9 +497,18 @@ def manifest():
 
 @app.get("/app/sw.js")
 def service_worker():
-    js = ("self.addEventListener('install',e=>self.skipWaiting());"
-          "self.addEventListener('activate',e=>self.clients.claim());"
-          "self.addEventListener('fetch',e=>{});")
+    js = (
+        "self.addEventListener('install',e=>self.skipWaiting());"
+        "self.addEventListener('activate',e=>self.clients.claim());"
+        "self.addEventListener('fetch',e=>{});"
+        "self.addEventListener('push',e=>{let d={title:'Simalee',body:''};"
+        "try{d=e.data.json()}catch(x){try{d.body=e.data.text()}catch(y){}}"
+        "e.waitUntil(self.registration.showNotification(d.title||'Simalee',"
+        "{body:d.body||'',icon:'/app/icon-192.png',badge:'/app/icon-192.png',vibrate:[120,60,120],tag:'simalee'}));});"
+        "self.addEventListener('notificationclick',e=>{e.notification.close();"
+        "e.waitUntil(clients.matchAll({type:'window'}).then(cs=>{for(const c of cs){if('focus'in c)return c.focus();}"
+        "if(clients.openWindow)return clients.openWindow('/app');}));});"
+    )
     return Response(content=js, media_type="application/javascript")
 
 
@@ -508,6 +569,12 @@ select{width:100%;padding:10px;border-radius:10px;background:#0c1030;color:var(-
     <div class=tog><span>🩺 Авто-диагностика</span><div class=sw id=adiag onclick="tg('adiag','adiag')"><i></i></div></div>
     <div style="color:var(--mut);font-size:12px;margin-top:6px" id=setnote>Изменения долетают до робота за ~5 сек.</div>
   </div>
+  <div class=card>
+    <div class=big>🔔 Уведомления на телефон</div>
+    <div style="color:var(--mut);font-size:13px;margin-bottom:10px" id=pushst>Включи, чтобы напоминания и сообщения робота приходили в шторку (даже когда приложение закрыто).</div>
+    <button style="width:100%;padding:13px;border:0;border-radius:12px;background:var(--gold);color:#1a1530;font-weight:700;font-size:16px" onclick=enablePush()>Включить уведомления</button>
+    <button style="width:100%;padding:11px;margin-top:8px;border:0;border-radius:12px;background:#23306a;color:#fff;font-size:15px" onclick=testPush()>Проверить (тест)</button>
+  </div>
 </div>
 <script>
 let KEY=localStorage.getItem('simkey')||'';
@@ -538,6 +605,19 @@ function sv(id,lab,v,suf){if(v==null||v==='')return;let el=document.getElementBy
 function tgset(id,v){document.getElementById(id).classList.toggle('on',v=='1'||v===1||v===true||v==='true');}
 document.addEventListener('input',e=>{if(e.target.type=='range')touched=Date.now();},true);
 if('serviceWorker'in navigator)navigator.serviceWorker.register('/app/sw.js');
+function urlB64(s){let p='='.repeat((4-s.length%4)%4);let b=atob((s+p).replace(/-/g,'+').replace(/_/g,'/'));return Uint8Array.from([...b].map(c=>c.charCodeAt(0)));}
+async function enablePush(){try{
+ if(!('serviceWorker'in navigator)||!('PushManager'in window)){pushst.textContent='Браузер не поддерживает уведомления (нужен Chrome, и приложение установлено).';return;}
+ let perm=await Notification.requestPermission();
+ if(perm!=='granted'){pushst.textContent='Уведомления запрещены — включи их для приложения в настройках телефона.';return;}
+ let reg=await navigator.serviceWorker.ready;
+ let pub=(await (await fetch('/vapid_public')).text()).trim();
+ let sub=await reg.pushManager.getSubscription();
+ if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlB64(pub)});
+ let r=await fetch('/push_subscribe?key='+encodeURIComponent(KEY),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub)});
+ pushst.textContent=r.ok?'✅ Уведомления включены. Напоминания будут приходить сюда.':'Ошибка подписки.';
+}catch(e){pushst.textContent='Не удалось включить: '+e;}}
+async function testPush(){try{await fetch('/push?key='+encodeURIComponent(KEY)+'&title=Simalee&text='+encodeURIComponent('Тестовое уведомление 🔔'));pushst.textContent='Тест отправлен — должно прийти в шторку через секунду.';}catch(e){pushst.textContent='Ошибка теста: '+e;}}
 show();tick();setInterval(tick,3000);
 </script></div></body></html>"""
 
