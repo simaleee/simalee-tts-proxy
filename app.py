@@ -611,6 +611,7 @@ select{width:100%;padding:10px;border-radius:10px;background:#0c1030;color:var(-
     <div class=set><label>🕐 Часы во сне <b id=clockbriv>—</b></label><input type=range id=clockbri min=5 max=100 oninput="lv('clockbriv',this.value,'%')" onchange="setp('clockbri',this.value)"></div>
     <div class=set><label>🗣 Голос</label><select id=voice onchange="setp('voice',this.value)">
       <option value=ru-RU-SvetlanaNeural>Светлана</option><option value=ru-RU-DmitryNeural>Дмитрий</option><option value=ru-RU-DariyaNeural>Дария</option></select></div>
+    <div class=tog><span>🎙 Микрофон (слух)</span><div class=sw id=micsw onclick=tgMic()><i></i></div></div>
     <div class=tog><span>🔁 Голос наоборот</span><div class=sw id=gender onclick="tg('gender','gender')"><i></i></div></div>
     <div class=tog><span>🐤 Звуки в покое</span><div class=sw id=chirp onclick="tg('chirp','chirp')"><i></i></div></div>
     <div class=tog><span>🩺 Авто-диагностика</span><div class=sw id=adiag onclick="tg('adiag','adiag')"><i></i></div></div>
@@ -635,6 +636,7 @@ function lv(id,v,suf){document.getElementById(id).textContent=v+(suf||'');}
 function setp(k,v){fetch('/set_remote?key='+encodeURIComponent(KEY)+'&'+k+'='+encodeURIComponent(v));document.getElementById('setnote').textContent='Отправлено: '+k+' = '+v;}
 let st={};
 function tg(id,k){let on=!document.getElementById(id).classList.contains('on');document.getElementById(id).classList.toggle('on',on);setp(k,on?1:0);}
+function tgMic(){let on=!document.getElementById('micsw').classList.contains('on');document.getElementById('micsw').classList.toggle('on',on);setp('micoff',on?0:1);}
 let touched=0;
 async function tick(){if(!KEY)return;
  try{let r=await fetch('/status_remote?key='+encodeURIComponent(KEY));
@@ -649,7 +651,7 @@ async function tick(){if(!KEY)return;
   if(Date.now()-touched>4000){ // don't fight the user mid-drag
    sv('vol','volv',d.vol,'');sv('mic','micv',d.mic,'%');sv('bri','briv',d.bri,'%');sv('eglow','eglowv',d.eglow,'%');sv('clockbri','clockbriv',d.clockbri,'%');
    if(d.voice&&document.activeElement!=voice)voice.value=d.voice;
-   tgset('gender',d.gender);tgset('chirp',d.chirp);tgset('adiag',d.adiag);
+   tgset('micsw',d.micon);tgset('gender',d.gender);tgset('chirp',d.chirp);tgset('adiag',d.adiag);
   }
  }catch(e){}}
 function sv(id,lab,v,suf){if(v==null||v==='')return;let el=document.getElementById(id);if(el!==document.activeElement){el.value=v;document.getElementById(lab).textContent=v+suf;}}
