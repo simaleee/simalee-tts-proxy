@@ -649,16 +649,23 @@ document.addEventListener('input',e=>{if(e.target.type=='range')touched=Date.now
 if('serviceWorker'in navigator)navigator.serviceWorker.register('/app/sw.js');
 function urlB64(s){let p='='.repeat((4-s.length%4)%4);let b=atob((s+p).replace(/-/g,'+').replace(/_/g,'/'));return Uint8Array.from([...b].map(c=>c.charCodeAt(0)));}
 async function enablePush(){try{
- if(!('serviceWorker'in navigator)||!('PushManager'in window)){pushst.textContent='Браузер не поддерживает уведомления (нужен Chrome, и приложение установлено).';return;}
+ pushst.textContent='Проверяю поддержку…';
+ if(!('serviceWorker'in navigator)){pushst.textContent='❌ Нет serviceWorker — открой как УСТАНОВЛЕННОЕ приложение в Chrome.';return;}
+ if(!('PushManager'in window)){pushst.textContent='❌ Телефон без Web Push (нет Google-сервисов / не Chrome).';return;}
+ pushst.textContent='Запрашиваю разрешение…';
  let perm=await Notification.requestPermission();
- if(perm!=='granted'){pushst.textContent='Уведомления запрещены — включи их для приложения в настройках телефона.';return;}
- let reg=await navigator.serviceWorker.ready;
+ if(perm!=='granted'){pushst.textContent='❌ Разрешение: '+perm+'. Включи уведомления приложению в настройках телефона.';return;}
+ pushst.textContent='Жду сервис-воркер…';
+ let reg=await Promise.race([navigator.serviceWorker.ready,new Promise((_,rej)=>setTimeout(()=>rej(new Error('сервис-воркер не активировался')),8000))]);
+ pushst.textContent='Подписываюсь в FCM…';
  let pub=(await (await fetch('/vapid_public')).text()).trim();
  let sub=await reg.pushManager.getSubscription();
  if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlB64(pub)});
+ pushst.textContent='Сохраняю подписку…';
  let r=await fetch('/push_subscribe?key='+encodeURIComponent(KEY),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub)});
- pushst.textContent=r.ok?'✅ Уведомления включены. Напоминания будут приходить сюда.':'Ошибка подписки.';
-}catch(e){pushst.textContent='Не удалось включить: '+e;}}
+ let c=await(await fetch('/push_count?key='+encodeURIComponent(KEY))).json();
+ pushst.textContent=(r.ok&&c.subs>0)?('✅ Готово! Подписок на сервере: '+c.subs+'. Жми «Проверить».'):('⚠ Не сохранилось (ответ '+r.status+', subs='+c.subs+').');
+}catch(e){pushst.textContent='❌ Сломалось на шаге: '+(e.message||e)+' — часто это VPN, который режет Google/FCM. Попробуй БЕЗ VPN.';}}
 async function testPush(){try{let r=await(await fetch('/push?key='+encodeURIComponent(KEY)+'&title=Simalee&text='+encodeURIComponent('Тестовое уведомление 🔔'))).json();
  if(r.subs==0)pushst.textContent='⚠ Нет подписки. Нажми «Включить уведомления» и разреши их.';
  else if(r.sent>0)pushst.textContent='✅ Отправлено на '+r.sent+' устр. — должно прийти в шторку.';
