@@ -596,6 +596,13 @@ select{width:100%;padding:10px;border-radius:10px;background:#0c1030;color:var(-
     <div class=row><span class=k>🌐 IP в доме</span><span class=v id=ip>—</span></div>
   </div>
   <div class=card>
+    <div class=big>🔌 Реле (удалёнка) <span id=rstate style="float:right;font-size:14px;font-weight:400;color:var(--mut)">—</span></div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button style="flex:1;padding:13px;border:0;border-radius:12px;background:var(--grn);color:#06210f;font-weight:700;font-size:15px" onclick="setp('relay',1)">Включить</button>
+      <button style="flex:1;padding:13px;border:0;border-radius:12px;background:#3a2530;color:#fff;font-weight:700;font-size:15px" onclick="setp('relay',0)">Выключить</button>
+    </div>
+  </div>
+  <div class=card>
     <div class=big>Настройки</div>
     <div class=set><label>🔊 Громкость <b id=volv>—</b></label><input type=range id=vol min=0 max=21 oninput="lv('volv',this.value)" onchange="setp('vol',this.value)"></div>
     <div class=set><label>🎙 Чувствительность мика <b id=micv>—</b></label><input type=range id=mic min=0 max=100 oninput="lv('micv',this.value,'%')" onchange="setp('mic',this.value)"></div>
@@ -638,6 +645,7 @@ async function tick(){if(!KEY)return;
   en.textContent=(d.en!=null&&d.en!=='')?d.en+' %':'—';
   bat.textContent=(d.bat&&d.bat!='-1')?d.bat+' %':'от сети';
   slp.textContent=(d.slp=='1')?'спит':'бодрствует';up.textContent=fmtUp(d.up);ip.textContent=d.ip||'—';
+  if(d.ron!=null)document.getElementById('rstate').textContent=(d.ron=='1'?(d.rrelay=='1'?'● ВКЛ':'○ выкл'):'нет связи');
   if(Date.now()-touched>4000){ // don't fight the user mid-drag
    sv('vol','volv',d.vol,'');sv('mic','micv',d.mic,'%');sv('bri','briv',d.bri,'%');sv('eglow','eglowv',d.eglow,'%');sv('clockbri','clockbriv',d.clockbri,'%');
    if(d.voice&&document.activeElement!=voice)voice.value=d.voice;
