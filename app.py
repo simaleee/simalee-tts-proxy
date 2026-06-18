@@ -500,6 +500,7 @@ select{width:100%;padding:10px;border-radius:10px;background:#0c1030;color:var(-
     <div class=set><label>🎙 Чувствительность мика <b id=micv>—</b></label><input type=range id=mic min=0 max=100 oninput="lv('micv',this.value,'%')" onchange="setp('mic',this.value)"></div>
     <div class=set><label>🔆 Яркость экрана <b id=briv>—</b></label><input type=range id=bri min=5 max=100 oninput="lv('briv',this.value,'%')" onchange="setp('bri',this.value)"></div>
     <div class=set><label>👁 Свечение глаз <b id=eglowv>—</b></label><input type=range id=eglow min=5 max=100 oninput="lv('eglowv',this.value,'%')" onchange="setp('eglow',this.value)"></div>
+    <div class=set><label>🕐 Часы во сне <b id=clockbriv>—</b></label><input type=range id=clockbri min=5 max=100 oninput="lv('clockbriv',this.value,'%')" onchange="setp('clockbri',this.value)"></div>
     <div class=set><label>🗣 Голос</label><select id=voice onchange="setp('voice',this.value)">
       <option value=ru-RU-SvetlanaNeural>Светлана</option><option value=ru-RU-DmitryNeural>Дмитрий</option><option value=ru-RU-DariyaNeural>Дария</option></select></div>
     <div class=tog><span>🔁 Голос наоборот</span><div class=sw id=gender onclick="tg('gender','gender')"><i></i></div></div>
@@ -528,7 +529,7 @@ async function tick(){if(!KEY)return;
   bat.textContent=(d.bat&&d.bat!='-1')?d.bat+' %':'от сети';
   slp.textContent=(d.slp=='1')?'спит':'бодрствует';up.textContent=fmtUp(d.up);ip.textContent=d.ip||'—';
   if(Date.now()-touched>4000){ // don't fight the user mid-drag
-   sv('vol','volv',d.vol,'');sv('mic','micv',d.mic,'%');sv('bri','briv',d.bri,'%');sv('eglow','eglowv',d.eglow,'%');
+   sv('vol','volv',d.vol,'');sv('mic','micv',d.mic,'%');sv('bri','briv',d.bri,'%');sv('eglow','eglowv',d.eglow,'%');sv('clockbri','clockbriv',d.clockbri,'%');
    if(d.voice&&document.activeElement!=voice)voice.value=d.voice;
    tgset('gender',d.gender);tgset('chirp',d.chirp);tgset('adiag',d.adiag);
   }
