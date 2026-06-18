@@ -428,31 +428,47 @@ async def push_subscribe(request: Request, key: str = Query(...)):
     return "ok"
 
 
+LAST_PUSH_ERR = ""
+
+
 def _send_push(text, title="Simalee"):
+    global LAST_PUSH_ERR
     payload = _json.dumps({"title": title, "body": (text or "")[:300]})
-    dead = []
+    sent, failed, dead = 0, 0, []
     for sub in list(PUSH_SUBS):
         try:
             webpush(subscription_info=sub, data=payload,
                     vapid_private_key=VAPID_PRIVATE, vapid_claims={"sub": VAPID_SUB})
+            sent += 1
         except WebPushException as e:
+            failed += 1
+            LAST_PUSH_ERR = str(e)[:160]
             code = getattr(getattr(e, "response", None), "status_code", None)
             if code in (404, 410):
                 dead.append(sub)
-        except Exception:
-            pass
+        except Exception as e:
+            failed += 1
+            LAST_PUSH_ERR = str(e)[:160]
     for d in dead:
         if d in PUSH_SUBS:
             PUSH_SUBS.remove(d)
+    return sent, failed
 
 
-@app.get("/push", response_class=PlainTextResponse)
+@app.get("/push")
 def push(key: str = Query(...), text: str = Query(..., max_length=300), title: str = Query("Simalee")):
     # robot (or anything) calls this to push a notification to the phone(s)
     if key != PASSWORD:
         raise HTTPException(status_code=403, detail="bad key")
-    _send_push(text.strip(), title)
-    return "ok"
+    sent, failed = _send_push(text.strip(), title)
+    return JSONResponse({"subs": len(PUSH_SUBS), "sent": sent, "failed": failed, "err": LAST_PUSH_ERR})
+
+
+@app.get("/push_count")
+def push_count(key: str = Query(...)):
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    return JSONResponse({"subs": len(PUSH_SUBS), "err": LAST_PUSH_ERR})
 
 
 # ---- installable PWA (status + settings), served at /app ----
@@ -483,6 +499,30 @@ def icon192():
     return Response(content=ICON192, media_type="image/png")
 
 
+USER_ICON = None         # custom notification icon (uploaded from the app; in-memory)
+
+
+@app.post("/set_icon", response_class=PlainTextResponse)
+async def set_icon(request: Request, key: str = Query(...)):
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    global USER_ICON
+    body = await request.body()
+    try:
+        im = Image.open(io.BytesIO(body)).convert("RGB").resize((192, 192))
+        buf = io.BytesIO()
+        im.save(buf, "PNG")
+        USER_ICON = buf.getvalue()
+    except Exception:
+        raise HTTPException(status_code=400, detail="bad image")
+    return "ok"
+
+
+@app.get("/app/usericon.png")
+def usericon():                                     # custom icon if uploaded, else the default
+    return Response(content=USER_ICON if USER_ICON else ICON192, media_type="image/png")
+
+
 @app.get("/app/manifest.webmanifest")
 def manifest():
     return JSONResponse({
@@ -504,7 +544,7 @@ def service_worker():
         "self.addEventListener('push',e=>{let d={title:'Simalee',body:''};"
         "try{d=e.data.json()}catch(x){try{d.body=e.data.text()}catch(y){}}"
         "e.waitUntil(self.registration.showNotification(d.title||'Simalee',"
-        "{body:d.body||'',icon:'/app/icon-192.png',badge:'/app/icon-192.png',vibrate:[120,60,120],tag:'simalee'}));});"
+        "{body:d.body||'',icon:'/app/usericon.png',badge:'/app/usericon.png',vibrate:[120,60,120],tag:'simalee'}));});"
         "self.addEventListener('notificationclick',e=>{e.notification.close();"
         "e.waitUntil(clients.matchAll({type:'window'}).then(cs=>{for(const c of cs){if('focus'in c)return c.focus();}"
         "if(clients.openWindow)return clients.openWindow('/app');}));});"
@@ -574,6 +614,8 @@ select{width:100%;padding:10px;border-radius:10px;background:#0c1030;color:var(-
     <div style="color:var(--mut);font-size:13px;margin-bottom:10px" id=pushst>Включи, чтобы напоминания и сообщения робота приходили в шторку (даже когда приложение закрыто).</div>
     <button style="width:100%;padding:13px;border:0;border-radius:12px;background:var(--gold);color:#1a1530;font-weight:700;font-size:16px" onclick=enablePush()>Включить уведомления</button>
     <button style="width:100%;padding:11px;margin-top:8px;border:0;border-radius:12px;background:#23306a;color:#fff;font-size:15px" onclick=testPush()>Проверить (тест)</button>
+    <label style="display:block;margin-top:12px;color:var(--mut);font-size:13px">🖼 Своя иконка уведомлений:</label>
+    <input type=file id=iconf accept="image/*" onchange=uploadIcon() style="width:100%;margin-top:6px;color:var(--mut);font-size:13px">
   </div>
 </div>
 <script>
@@ -617,8 +659,14 @@ async function enablePush(){try{
  let r=await fetch('/push_subscribe?key='+encodeURIComponent(KEY),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub)});
  pushst.textContent=r.ok?'✅ Уведомления включены. Напоминания будут приходить сюда.':'Ошибка подписки.';
 }catch(e){pushst.textContent='Не удалось включить: '+e;}}
-async function testPush(){try{await fetch('/push?key='+encodeURIComponent(KEY)+'&title=Simalee&text='+encodeURIComponent('Тестовое уведомление 🔔'));pushst.textContent='Тест отправлен — должно прийти в шторку через секунду.';}catch(e){pushst.textContent='Ошибка теста: '+e;}}
-show();tick();setInterval(tick,3000);
+async function testPush(){try{let r=await(await fetch('/push?key='+encodeURIComponent(KEY)+'&title=Simalee&text='+encodeURIComponent('Тестовое уведомление 🔔'))).json();
+ if(r.subs==0)pushst.textContent='⚠ Нет подписки. Нажми «Включить уведомления» и разреши их.';
+ else if(r.sent>0)pushst.textContent='✅ Отправлено на '+r.sent+' устр. — должно прийти в шторку.';
+ else pushst.textContent='Подписка есть ('+r.subs+'), но доставка не прошла'+(r.err?(': '+r.err):'')+'. Скорее всего мешает VPN/блокировка Google — попробуй без VPN.';
+}catch(e){pushst.textContent='Ошибка теста: '+e;}}
+async function uploadIcon(){let f=document.getElementById('iconf').files[0];if(!f)return;try{let b=await f.arrayBuffer();let r=await fetch('/set_icon?key='+encodeURIComponent(KEY),{method:'POST',body:b});pushst.textContent=r.ok?'✅ Иконка установлена — появится в следующем уведомлении.':'Не удалось загрузить иконку.';}catch(e){pushst.textContent='Ошибка иконки: '+e;}}
+async function pushStatus(){try{let r=await(await fetch('/push_count?key='+encodeURIComponent(KEY))).json();if(r.subs>0)pushst.textContent='✅ Подписано устройств: '+r.subs+'. Напоминания придут в шторку.';}catch(e){}}
+show();tick();if(KEY)pushStatus();setInterval(tick,3000);
 </script></div></body></html>"""
 
 
