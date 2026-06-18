@@ -14,9 +14,11 @@ import xml.etree.ElementTree as ET
 from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse, PlainTextResponse, Response, JSONResponse, HTMLResponse
+import io
 import edge_tts
 import httpx
 import numpy as np
+from PIL import Image, ImageDraw
 
 PASSWORD = os.environ.get("TTS_PASSWORD", "Simalee00221922")
 DEFAULT_VOICE = "ru-RU-SvetlanaNeural"   # friendly female; or ru-RU-DmitryNeural for male
@@ -373,6 +375,175 @@ def outbox_remote(key: str = Query(...), since: int = Query(0)):
         raise HTTPException(status_code=403, detail="bad key")
     msgs = [m for m in REMOTE_OUT if m["id"] > since]
     return JSONResponse({"msgs": msgs, "last": REMOTE_OUT_ID})
+
+
+# ---- remote SETTINGS (the PWA changes settings; the robot polls + applies) ----
+REMOTE_SET = {}          # pending setting changes from the app -> {param: value}
+
+
+@app.get("/set_remote", response_class=PlainTextResponse)
+def set_remote(request: Request, key: str = Query(...)):
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    for k, v in request.query_params.items():
+        if k != "key":
+            REMOTE_SET[k] = v
+    return "ok"
+
+
+@app.get("/settings_poll")
+def settings_poll(key: str = Query(...)):
+    # robot polls this; returns pending changes and clears them
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    global REMOTE_SET, REMOTE_TS
+    REMOTE_TS = _time.time()
+    out = dict(REMOTE_SET)
+    REMOTE_SET = {}
+    return JSONResponse(out)
+
+
+# ---- installable PWA (status + settings), served at /app ----
+def _make_icon(sz):
+    img = Image.new("RGB", (sz, sz), (14, 18, 48))
+    d = ImageDraw.Draw(img)
+    r, ry, cy = sz * 0.17, sz * 0.12, sz * 0.46
+    for cx in (sz * 0.35, sz * 0.65):                       # two glowing almond eyes
+        d.ellipse([cx - r, cy - ry, cx + r, cy + ry], fill=(95, 200, 255))
+        d.ellipse([cx - r * 0.45, cy - ry * 0.45, cx + r * 0.45, cy + ry * 0.45], fill=(14, 18, 48))
+    d.arc([sz * 0.40, sz * 0.52, sz * 0.60, sz * 0.72], 20, 160, fill=(233, 196, 106), width=max(2, sz // 36))
+    buf = io.BytesIO()
+    img.save(buf, "PNG")
+    return buf.getvalue()
+
+
+ICON512 = _make_icon(512)
+ICON192 = _make_icon(192)
+
+
+@app.get("/app/icon-512.png")
+def icon512():
+    return Response(content=ICON512, media_type="image/png")
+
+
+@app.get("/app/icon-192.png")
+def icon192():
+    return Response(content=ICON192, media_type="image/png")
+
+
+@app.get("/app/manifest.webmanifest")
+def manifest():
+    return JSONResponse({
+        "name": "Simalee", "short_name": "Simalee", "start_url": "/app", "scope": "/app",
+        "display": "standalone", "background_color": "#0b0e26", "theme_color": "#141a44",
+        "icons": [
+            {"src": "/app/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+            {"src": "/app/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+        ],
+    }, media_type="application/manifest+json")
+
+
+@app.get("/app/sw.js")
+def service_worker():
+    js = ("self.addEventListener('install',e=>self.skipWaiting());"
+          "self.addEventListener('activate',e=>self.clients.claim());"
+          "self.addEventListener('fetch',e=>{});")
+    return Response(content=js, media_type="application/javascript")
+
+
+APP_HTML = """<!doctype html><html lang=ru><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name=theme-color content="#141a44"><title>Simalee</title>
+<link rel=manifest href="/app/manifest.webmanifest">
+<link rel=apple-touch-icon href="/app/icon-192.png">
+<style>
+:root{--ink:#eef;--card:#171c44;--line:#2a316a;--gold:#e9c46a;--mut:#8a93c8;--grn:#4cc78a;--red:#e15b4c}
+*{box-sizing:border-box}body{margin:0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:linear-gradient(160deg,#0b0e26,#141a44);color:var(--ink);min-height:100dvh;padding:14px env(safe-area-inset-right) calc(14px + env(safe-area-inset-bottom)) env(safe-area-inset-left)}
+.wrap{max-width:480px;margin:0 auto}
+h1{font-size:20px;margin:4px 2px 12px}h1 b{color:var(--gold)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:12px}
+.big{font-size:17px;font-weight:700;margin-bottom:8px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:7px;vertical-align:middle}
+.row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #ffffff10;font-size:15px}
+.row:last-child{border:0}.row .k{color:var(--mut)}.row .v{font-weight:600}
+.set{margin:12px 0}.set label{display:flex;justify-content:space-between;font-size:14px;color:var(--mut);margin-bottom:5px}
+.set label b{color:var(--ink)}
+input[type=range]{width:100%;accent-color:var(--gold)}
+select{width:100%;padding:10px;border-radius:10px;background:#0c1030;color:var(--ink);border:1px solid var(--line);font-size:15px}
+.tog{display:flex;align-items:center;justify-content:space-between;padding:8px 0;font-size:15px}
+.sw{width:46px;height:26px;border-radius:13px;background:#33396a;position:relative;transition:.15s}
+.sw.on{background:var(--grn)}.sw i{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:.15s}.sw.on i{left:23px}
+.kc{margin:18vh auto 0;max-width:330px;text-align:center}
+.kc input{width:100%;display:block;padding:14px;margin:12px 0;border-radius:12px;border:1px solid var(--line);background:#0c1030;color:var(--ink);font-size:16px}
+.kc button{width:100%;padding:14px;border:0;border-radius:12px;background:var(--gold);color:#1a1530;font-weight:700;font-size:16px}
+</style></head><body><div class=wrap>
+<div class=kc id=keycard style=display:none>
+  <h1>сяма<b>лии</b></h1><div style="color:var(--mut)">Пароль доступа (один раз)</div>
+  <input id=key type=password placeholder=пароль autocomplete=current-password onkeydown="if(event.key=='Enter')saveKey()">
+  <button onclick=saveKey()>Войти</button>
+</div>
+<div id=app style=display:none>
+  <h1>сяма<b>лии</b></h1>
+  <div class=card>
+    <div class=big id=online>…</div>
+    <div class=row><span class=k>🌡 Температура</span><span class=v id=t>—</span></div>
+    <div class=row><span class=k>💧 Влажность</span><span class=v id=h>—</span></div>
+    <div class=row><span class=k>⚡ Энергия</span><span class=v id=en>—</span></div>
+    <div class=row><span class=k>🔋 Батарея</span><span class=v id=bat>—</span></div>
+    <div class=row><span class=k>💤 Состояние</span><span class=v id=slp>—</span></div>
+    <div class=row><span class=k>⏱ Аптайм</span><span class=v id=up>—</span></div>
+    <div class=row><span class=k>🌐 IP в доме</span><span class=v id=ip>—</span></div>
+  </div>
+  <div class=card>
+    <div class=big>Настройки</div>
+    <div class=set><label>🔊 Громкость <b id=volv>—</b></label><input type=range id=vol min=0 max=21 oninput="lv('volv',this.value)" onchange="setp('vol',this.value)"></div>
+    <div class=set><label>🎙 Чувствительность мика <b id=micv>—</b></label><input type=range id=mic min=0 max=100 oninput="lv('micv',this.value,'%')" onchange="setp('mic',this.value)"></div>
+    <div class=set><label>🔆 Яркость экрана <b id=briv>—</b></label><input type=range id=bri min=5 max=100 oninput="lv('briv',this.value,'%')" onchange="setp('bri',this.value)"></div>
+    <div class=set><label>👁 Свечение глаз <b id=eglowv>—</b></label><input type=range id=eglow min=5 max=100 oninput="lv('eglowv',this.value,'%')" onchange="setp('eglow',this.value)"></div>
+    <div class=set><label>🗣 Голос</label><select id=voice onchange="setp('voice',this.value)">
+      <option value=ru-RU-SvetlanaNeural>Светлана</option><option value=ru-RU-DmitryNeural>Дмитрий</option><option value=ru-RU-DariyaNeural>Дария</option></select></div>
+    <div class=tog><span>🔁 Голос наоборот</span><div class=sw id=gender onclick="tg('gender','gender')"><i></i></div></div>
+    <div class=tog><span>🐤 Звуки в покое</span><div class=sw id=chirp onclick="tg('chirp','chirp')"><i></i></div></div>
+    <div class=tog><span>🩺 Авто-диагностика</span><div class=sw id=adiag onclick="tg('adiag','adiag')"><i></i></div></div>
+    <div style="color:var(--mut);font-size:12px;margin-top:6px" id=setnote>Изменения долетают до робота за ~5 сек.</div>
+  </div>
+</div>
+<script>
+let KEY=localStorage.getItem('simkey')||'';
+function show(){keycard.style.display=KEY?'none':'block';app.style.display=KEY?'block':'none';}
+function saveKey(){KEY=document.getElementById('key').value.trim();localStorage.setItem('simkey',KEY);show();tick();}
+function fmtUp(s){s=+s||0;let h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?h+'ч '+m+'м':m+'м';}
+function lv(id,v,suf){document.getElementById(id).textContent=v+(suf||'');}
+function setp(k,v){fetch('/set_remote?key='+encodeURIComponent(KEY)+'&'+k+'='+encodeURIComponent(v));document.getElementById('setnote').textContent='Отправлено: '+k+' = '+v;}
+let st={};
+function tg(id,k){let on=!document.getElementById(id).classList.contains('on');document.getElementById(id).classList.toggle('on',on);setp(k,on?1:0);}
+let touched=0;
+async function tick(){if(!KEY)return;
+ try{let r=await fetch('/status_remote?key='+encodeURIComponent(KEY));
+  if(r.status==403){localStorage.removeItem('simkey');KEY='';show();return;}
+  let d=await r.json();st=d;let on=d.age>=0&&d.age<14;
+  online.innerHTML='<span class=dot style="background:'+(on?'#4cc78a':'#e15b4c')+'"></span>'+(on?'На связи':(d.age<0?'Ещё не выходил на связь':'Был '+d.age+'с назад'));
+  t.textContent=(d.t&&d.t!='-99')?d.t+' °C':'—';h.textContent=(d.h&&d.h!='-99')?d.h+' %':'—';
+  en.textContent=(d.en!=null&&d.en!=='')?d.en+' %':'—';
+  bat.textContent=(d.bat&&d.bat!='-1')?d.bat+' %':'от сети';
+  slp.textContent=(d.slp=='1')?'спит':'бодрствует';up.textContent=fmtUp(d.up);ip.textContent=d.ip||'—';
+  if(Date.now()-touched>4000){ // don't fight the user mid-drag
+   sv('vol','volv',d.vol,'');sv('mic','micv',d.mic,'%');sv('bri','briv',d.bri,'%');sv('eglow','eglowv',d.eglow,'%');
+   if(d.voice&&document.activeElement!=voice)voice.value=d.voice;
+   tgset('gender',d.gender);tgset('chirp',d.chirp);tgset('adiag',d.adiag);
+  }
+ }catch(e){}}
+function sv(id,lab,v,suf){if(v==null||v==='')return;let el=document.getElementById(id);if(el!==document.activeElement){el.value=v;document.getElementById(lab).textContent=v+suf;}}
+function tgset(id,v){document.getElementById(id).classList.toggle('on',v=='1'||v===1||v===true||v==='true');}
+document.addEventListener('input',e=>{if(e.target.type=='range')touched=Date.now();},true);
+if('serviceWorker'in navigator)navigator.serviceWorker.register('/app/sw.js');
+show();tick();setInterval(tick,3000);
+</script></div></body></html>"""
+
+
+@app.get("/app", response_class=HTMLResponse)
+def app_page():
+    return APP_HTML
 
 
 REMOTE_HTML = """<!doctype html><html lang=ru><head><meta charset=utf-8>
