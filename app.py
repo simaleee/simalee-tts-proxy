@@ -571,6 +571,16 @@ h1{font-size:20px;margin:4px 2px 12px}h1 b{color:var(--gold)}
 .set label b{color:var(--ink)}
 input[type=range]{width:100%;accent-color:var(--gold)}
 select{width:100%;padding:10px;border-radius:10px;background:#0c1030;color:var(--ink);border:1px solid var(--line);font-size:15px}
+@keyframes fadeup{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.35);opacity:.55}}
+@keyframes pop{0%{transform:scale(.6);opacity:0}70%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}
+#app .card{animation:fadeup .38s both}
+#app .card:nth-of-type(2){animation-delay:.05s}#app .card:nth-of-type(3){animation-delay:.1s}#app .card:nth-of-type(4){animation-delay:.15s}#app .card:nth-of-type(5){animation-delay:.2s}
+button{transition:transform .09s ease,filter .12s}button:active{transform:scale(.93);filter:brightness(1.12)}
+.snd:active{transform:scale(.88)}
+.dot{animation:pulse 1.6s ease-in-out infinite}
+.row .v,.big b{display:inline-block}
+.big{animation:pop .4s both}
 .tog{display:flex;align-items:center;justify-content:space-between;padding:8px 0;font-size:15px}
 .sw{width:46px;height:26px;border-radius:13px;background:#33396a;position:relative;transition:.15s}
 .sw.on{background:var(--grn)}.sw i{position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#fff;transition:.15s}.sw.on i{left:23px}
@@ -695,6 +705,8 @@ function pushDiag(){try{
  if(el)el.textContent='SW:'+(sw?'да':'НЕТ')+' · Push:'+(pm?'да':'НЕТ')+' · Разрешение:'+perm+' · Установлено:'+inst;
 }catch(e){}}
 window.addEventListener('error',ev=>{let el=document.getElementById('pushdiag');if(el)el.textContent='JS-ошибка: '+(ev.message||ev);});
+let _ac;function beep(f,d){try{_ac=_ac||new(window.AudioContext||window.webkitAudioContext)();let o=_ac.createOscillator(),g=_ac.createGain();o.type='triangle';o.frequency.value=f||780;g.gain.value=.05;o.connect(g);g.connect(_ac.destination);let t=_ac.currentTime;o.start(t);g.gain.exponentialRampToValueAtTime(.0001,t+(d||.07));o.stop(t+(d||.1));}catch(e){}}
+document.addEventListener('click',e=>{let el=e.target.closest('button,.sw');if(el)beep(el.classList.contains('sw')?520:(el.classList.contains('snd')?920:780),.06);},true);
 show();tick();if(KEY){pushStatus();pushDiag();}setInterval(tick,3000);
 </script></div></body></html>"""
 
