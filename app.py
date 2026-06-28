@@ -431,9 +431,15 @@ async def push_subscribe(request: Request, key: str = Query(...)):
 LAST_PUSH_ERR = ""
 
 
-def _send_push(text, title="Simalee"):
+def _send_push(text, title="Simalee", icon="/app/usericon.png", badge="/app/usericon.png", tag="simalee"):
     global LAST_PUSH_ERR
-    payload = _json.dumps({"title": title, "body": (text or "")[:300]})
+    payload = _json.dumps({
+        "title": title,
+        "body": (text or "")[:300],
+        "icon": icon,
+        "badge": badge,
+        "tag": tag,
+    })
     sent, failed, dead = 0, 0, []
     for sub in list(PUSH_SUBS):
         try:
@@ -456,11 +462,12 @@ def _send_push(text, title="Simalee"):
 
 
 @app.get("/push")
-def push(key: str = Query(...), text: str = Query(..., max_length=300), title: str = Query("Simalee")):
+def push(key: str = Query(...), text: str = Query(..., max_length=300), title: str = Query("Simalee"),
+         icon: str = Query("/app/usericon.png"), badge: str = Query("/app/usericon.png"), tag: str = Query("simalee")):
     # robot (or anything) calls this to push a notification to the phone(s)
     if key != PASSWORD:
         raise HTTPException(status_code=403, detail="bad key")
-    sent, failed = _send_push(text.strip(), title)
+    sent, failed = _send_push(text.strip(), title, icon, badge, tag)
     return JSONResponse({"subs": len(PUSH_SUBS), "sent": sent, "failed": failed, "err": LAST_PUSH_ERR})
 
 
@@ -544,7 +551,8 @@ def service_worker():
         "self.addEventListener('push',e=>{let d={title:'Simalee',body:''};"
         "try{d=e.data.json()}catch(x){try{d.body=e.data.text()}catch(y){}}"
         "e.waitUntil(self.registration.showNotification(d.title||'Simalee',"
-        "{body:d.body||'',icon:'/app/usericon.png',badge:'/app/usericon.png',vibrate:[120,60,120],tag:'simalee'}));});"
+        "{body:d.body||'',icon:d.icon||'/app/usericon.png',badge:d.badge||d.icon||'/app/usericon.png',"
+        "vibrate:d.vibrate||[120,60,120],tag:d.tag||'simalee'}));});"
         "self.addEventListener('notificationclick',e=>{e.notification.close();"
         "e.waitUntil(clients.matchAll({type:'window'}).then(cs=>{for(const c of cs){if('focus'in c)return c.focus();}"
         "if(clients.openWindow)return clients.openWindow('/app');}));});"
@@ -710,6 +718,159 @@ document.addEventListener('click',e=>{let el=e.target.closest('button,.sw');if(e
 show();tick();if(KEY){pushStatus();pushDiag();}setInterval(tick,3000);
 </script></div></body></html>"""
 
+
+# New /app shell. The legacy APP_HTML above is kept as a fallback reference while the
+# Render PWA moves to the glass-style control panel.
+APP_HTML = r"""<!doctype html><html lang=ru><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name=theme-color content="#e9f0f2"><title>Simalee</title>
+<link rel=manifest href="/app/manifest.webmanifest">
+<link rel=apple-touch-icon href="/app/icon-192.png">
+<style>
+:root{--bg:#e8eff1;--paper:rgba(255,255,255,.62);--paper2:rgba(255,255,255,.84);--ink:#172126;--mut:#65737a;--line:rgba(69,86,94,.18);--accent:#2563eb;--accent2:#05a8aa;--warm:#e7b95b;--ok:#21a67a;--bad:#d4505f;--shadow:10px 14px 30px rgba(75,92,99,.20),-8px -8px 24px rgba(255,255,255,.68);--r:8px}
+body[data-theme=night]{--bg:#22282a;--paper:rgba(45,51,52,.72);--paper2:rgba(50,57,58,.92);--ink:#edf7f7;--mut:#aab7b8;--line:rgba(255,255,255,.10);--accent:#2ed3ff;--accent2:#e8892e;--warm:#e8892e;--shadow:9px 9px 20px rgba(0,0,0,.38),-5px -5px 16px rgba(255,255,255,.045)}
+body[data-theme=mono]{--bg:#f4f2ed;--paper:rgba(255,255,255,.68);--paper2:rgba(255,255,255,.9);--ink:#24211b;--mut:#766f62;--line:rgba(88,76,55,.16);--accent:#178f8d;--accent2:#c05f46;--warm:#d0a44f;--shadow:9px 12px 24px rgba(91,80,60,.18),-8px -8px 20px rgba(255,255,255,.72)}
+*{box-sizing:border-box}html,body{min-height:100%;margin:0}body{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:linear-gradient(145deg,var(--bg),color-mix(in srgb,var(--bg),#ffffff 22%));color:var(--ink);letter-spacing:0}
+button,input,select{font:inherit}button{border:0;color:inherit;cursor:pointer}button:active{transform:translateY(1px) scale(.985);filter:brightness(.96)}.wrap{width:min(980px,100%);margin:0 auto;padding:14px 14px calc(86px + env(safe-area-inset-bottom))}
+.top{display:flex;align-items:center;gap:12px;margin:2px 0 14px}.avatar{width:52px;height:52px;border-radius:50%;object-fit:cover;box-shadow:var(--shadow);border:1px solid var(--line);background:var(--paper2)}.brand{min-width:0;flex:1}.brand h1{font-size:22px;line-height:1.05;margin:0;font-weight:760}.brand p{margin:4px 0 0;color:var(--mut);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pill{display:inline-flex;align-items:center;gap:7px;padding:8px 10px;border-radius:999px;background:var(--paper2);border:1px solid var(--line);box-shadow:var(--shadow);font-size:13px;font-weight:650}.dot{width:9px;height:9px;border-radius:50%;background:var(--bad);box-shadow:0 0 0 5px color-mix(in srgb,var(--bad),transparent 82%)}.dot.ok{background:var(--ok);box-shadow:0 0 0 5px color-mix(in srgb,var(--ok),transparent 82%)}
+.themes{display:flex;gap:6px}.themes button{width:28px;height:28px;border-radius:50%;background:var(--paper2);border:1px solid var(--line);box-shadow:var(--shadow)}.themes button[data-v=glass]{background:linear-gradient(135deg,#f8ffff,#cfe6ee)}.themes button[data-v=night]{background:linear-gradient(135deg,#1f2426,#3a4243)}.themes button[data-v=mono]{background:linear-gradient(135deg,#fff8e8,#d7c29b)}
+.panel{display:none;animation:rise .28s ease both}.panel.active{display:block}.grid{display:grid;grid-template-columns:1fr;gap:10px}.card{background:var(--paper);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);backdrop-filter:blur(18px);padding:14px;min-width:0}.hero{overflow:hidden;position:relative}.hero:before{content:"";position:absolute;inset:0;background:linear-gradient(120deg,transparent,color-mix(in srgb,var(--accent),transparent 86%),transparent);transform:translateX(-120%);animation:sweep 6s ease-in-out infinite}.hero>*{position:relative}.hero h2{font-size:18px;margin:0 0 10px}.hero .big{font-size:34px;font-weight:780;margin:0}.hero .sub{color:var(--mut);font-size:13px;margin-top:4px}.stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.stat{padding:12px;border-radius:var(--r);background:color-mix(in srgb,var(--paper2),transparent 8%);border:1px solid var(--line);min-height:78px}.stat b{display:block;font-size:21px;margin-top:8px}.stat span{color:var(--mut);font-size:12px}.stat.good b{color:var(--ok)}.stat.warn b{color:var(--bad)}
+.section-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}.section-title h2{font-size:16px;margin:0}.section-title small{color:var(--mut)}.row{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);font-size:14px}.row:last-child{border-bottom:0}.row .k{color:var(--mut)}.row .v{text-align:right;font-weight:670;word-break:break-word}.set{margin:12px 0}.set label{display:flex;justify-content:space-between;color:var(--mut);font-size:13px;margin-bottom:7px}.set label b{color:var(--ink)}input[type=range]{width:100%;accent-color:var(--accent);height:28px}select,input[type=text],input[type=password]{width:100%;padding:12px;border-radius:var(--r);border:1px solid var(--line);background:var(--paper2);color:var(--ink);outline:none}.tog{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}.tog:last-child{border-bottom:0}.sw{width:48px;height:28px;border-radius:999px;background:color-mix(in srgb,var(--mut),transparent 72%);position:relative;flex:0 0 auto;transition:.18s}.sw i{position:absolute;width:22px;height:22px;left:3px;top:3px;background:#fff;border-radius:50%;box-shadow:0 2px 7px rgba(0,0,0,.18);transition:.18s}.sw.on{background:var(--ok)}.sw.on i{left:23px}
+.btns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.btn,.chip{border-radius:var(--r);padding:12px;background:var(--paper2);border:1px solid var(--line);box-shadow:var(--shadow);font-weight:700;text-align:center}.btn.primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff}.btn.warm{background:linear-gradient(135deg,var(--warm),#f4d78b);color:#31230d}.btn.bad{background:linear-gradient(135deg,#d4505f,#9c3544);color:#fff}.chips{display:flex;gap:8px;overflow:auto;padding:2px 1px 8px;scrollbar-width:none}.chips::-webkit-scrollbar{display:none}.chip{white-space:nowrap;box-shadow:none;padding:9px 11px;font-size:13px}.thread{height:290px;overflow:auto;display:flex;flex-direction:column;gap:8px;padding:2px}.msg{max-width:86%;border-radius:var(--r);padding:10px 12px;font-size:14px;line-height:1.35;border:1px solid var(--line)}.msg.you{align-self:flex-end;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff}.msg.rob{align-self:flex-start;background:var(--paper2)}.msg .tm{display:block;font-size:10px;opacity:.62;margin-top:4px}.composer{display:grid;grid-template-columns:1fr 46px 46px;gap:8px;margin-top:10px}.composer button{border-radius:var(--r);background:var(--paper2);border:1px solid var(--line);font-size:18px}
+.login{min-height:100dvh;display:grid;place-items:center;padding:18px}.login-card{width:min(360px,100%);padding:22px;background:var(--paper);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);backdrop-filter:blur(18px);text-align:center}.login-card img{width:72px;height:72px;border-radius:50%;box-shadow:var(--shadow);margin-bottom:10px}.login-card h1{margin:0;font-size:24px}.login-card p{color:var(--mut);font-size:13px;margin:6px 0 16px}.login-card button{width:100%;margin-top:10px;border-radius:var(--r);padding:13px;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;font-weight:760}.filepick{display:flex;align-items:center;gap:10px;margin-top:7px;padding:8px;border-radius:var(--r);background:var(--paper2);border:1px solid var(--line);cursor:pointer;overflow:hidden}.filepick input{position:absolute;opacity:0;pointer-events:none}.filepick span{padding:9px 11px;border-radius:var(--r);background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;font-weight:700}.filepick em{font-style:normal;color:var(--mut);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.tabbar{position:fixed;left:50%;bottom:calc(10px + env(safe-area-inset-bottom));transform:translateX(-50%);width:min(560px,calc(100% - 18px));display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:7px;border-radius:var(--r);background:color-mix(in srgb,var(--paper2),transparent 4%);border:1px solid var(--line);box-shadow:var(--shadow);backdrop-filter:blur(18px)}.tabbar button{border-radius:var(--r);padding:9px 4px;background:transparent;color:var(--mut);font-size:12px}.tabbar button.active{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff}.note{color:var(--mut);font-size:12px}.mono{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}.diag{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11px;color:var(--mut);background:color-mix(in srgb,var(--ink),transparent 92%);border:1px solid var(--line);border-radius:var(--r);padding:8px;margin-top:8px;overflow:auto}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}@keyframes sweep{0%,45%{transform:translateX(-130%)}75%,100%{transform:translateX(130%)}}@media (min-width:760px){.grid{grid-template-columns:1.1fr .9fr}.stats{grid-template-columns:repeat(4,1fr)}.panel[data-panel=controls] .grid{grid-template-columns:1fr 1fr}.panel[data-panel=notify] .grid{grid-template-columns:1fr 1fr}.thread{height:390px}}@media (prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
+</style></head><body><div id=login class=login style=display:none><div class=login-card>
+  <img src="/app/usericon.png" alt=""><h1>Simalee</h1><p>Удалённая панель</p>
+  <input id=key type=password placeholder="Пароль" autocomplete=current-password onkeydown="if(event.key==='Enter')saveKey()">
+  <button onclick=saveKey()>Войти</button>
+</div></div>
+<div id=app style=display:none><div class=wrap>
+  <div class=top>
+    <img class=avatar src="/app/usericon.png" alt="">
+    <div class=brand><h1>Simalee</h1><p id=subtitle>удалённая связь с роботом</p></div>
+    <div class=pill id=online><span class=dot></span><span>...</span></div>
+    <div class=themes><button data-v=glass title=Glass onclick="theme('glass')"></button><button data-v=night title=Night onclick="theme('night')"></button><button data-v=mono title=Soft onclick="theme('mono')"></button></div>
+  </div>
+
+  <section class="panel active" data-panel=status>
+    <div class=grid>
+      <div class="card hero"><h2>Состояние</h2><p class=big id=mainState>...</p><p class=sub id=mainSub>ожидаю данные</p></div>
+      <div class=card><div class=section-title><h2>Система</h2><small id=fw>—</small></div>
+        <div class=row><span class=k>IP дома</span><span class=v id=ip>—</span></div>
+        <div class=row><span class=k>Собеседник</span><span class=v id=spk>—</span></div>
+        <div class=row><span class=k>PC Bridge</span><span class=v id=pc>—</span></div>
+        <div class=row><span class=k>AI модель</span><span class=v id=aimodel>—</span></div>
+      </div>
+    </div>
+    <div class=stats style="margin-top:10px">
+      <div class=stat><span>Температура</span><b id=t>—</b></div><div class=stat><span>Влажность</span><b id=h>—</b></div>
+      <div class=stat><span>Энергия</span><b id=en>—</b></div><div class=stat><span>Батарея</span><b id=bat>—</b></div>
+    </div>
+    <div class=grid style="margin-top:10px">
+      <div class=card><div class=section-title><h2>Тело</h2><small id=touchState>—</small></div>
+        <div class=row><span class=k>Сон</span><span class=v id=slp>—</span></div>
+        <div class=row><span class=k>Реле</span><span class=v id=rstate>—</span></div>
+        <div class=row><span class=k>Касание</span><span class=v id=touch>—</span></div>
+        <div class=row><span class=k>Аптайм</span><span class=v id=up>—</span></div>
+      </div>
+      <div class=card><div class=section-title><h2>Производительность</h2><small>STT / AI / TTS</small></div>
+        <div class=row><span class=k>Распознавание</span><span class=v id=sttms>—</span></div>
+        <div class=row><span class=k>Мозг</span><span class=v id=aims>—</span></div>
+        <div class=row><span class=k>Голос</span><span class=v id=ttsms>—</span></div>
+        <div class=row><span class=k>Ошибки AI</span><span class=v id=aifails>—</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class=panel data-panel=controls>
+    <div class=grid>
+      <div class=card><div class=section-title><h2>Настройки</h2><small id=setnote>готово</small></div>
+        <div class=set><label>Громкость <b id=volv>—</b></label><input type=range id=vol min=0 max=21 oninput="lv('volv',this.value)" onchange="setp('vol',this.value)"></div>
+        <div class=set><label>Микрофон <b id=micv>—</b></label><input type=range id=mic min=0 max=100 oninput="lv('micv',this.value,'%')" onchange="setp('mic',this.value)"></div>
+        <div class=set><label>Экран <b id=briv>—</b></label><input type=range id=bri min=5 max=100 oninput="lv('briv',this.value,'%')" onchange="setp('bri',this.value)"></div>
+        <div class=set><label>Прозрачность лица <b id=eglowv>—</b></label><input type=range id=eglow min=5 max=100 oninput="lv('eglowv',this.value,'%')" onchange="setp('eglow',this.value)"></div>
+        <div class=set><label>OLED помощника <b id=obriv>—</b></label><input type=range id=obri min=1 max=100 oninput="lv('obriv',this.value,'%')" onchange="setp('obri',this.value)"></div>
+        <div class=set><label>Часы во сне <b id=clockbriv>—</b></label><input type=range id=clockbri min=5 max=100 oninput="lv('clockbriv',this.value,'%')" onchange="setp('clockbri',this.value)"></div>
+        <div class=set><label>Голос</label><select id=voice onchange="setp('voice',this.value)"><option value=ru-RU-SvetlanaNeural>Светлана</option><option value=ru-RU-DmitryNeural>Дмитрий</option><option value=ru-RU-DariyaNeural>Дария</option></select></div>
+      </div>
+      <div class=card><div class=section-title><h2>Переключатели</h2><small>живые</small></div>
+        <div class=tog><span>Микрофон</span><div class=sw id=micsw onclick=tgMic()><i></i></div></div>
+        <div class=tog><span>Голос наоборот</span><div class=sw id=gender onclick="tg('gender','gender')"><i></i></div></div>
+        <div class=tog><span>Звуки в покое</span><div class=sw id=chirp onclick="tg('chirp','chirp')"><i></i></div></div>
+        <div class=tog><span>Авто-диагностика</span><div class=sw id=adiag onclick="tg('adiag','adiag')"><i></i></div></div>
+        <div class=tog><span>Реакция на касание</span><div class=sw id=touchreact onclick="tg('touchreact','touchreact')"><i></i></div></div>
+        <div class=section-title style="margin-top:14px"><h2>Реле</h2><small id=relayHint>—</small></div>
+        <div class=btns><button class="btn primary" onclick="setp('relay',1)">Включить</button><button class="btn bad" onclick="setp('relay',0)">Выключить</button></div>
+      </div>
+    </div>
+  </section>
+
+  <section class=panel data-panel=chat>
+    <div class=card><div class=section-title><h2>Связь</h2><small>текст / голос дома</small></div>
+      <div class=chips>
+        <button class=chip onclick="quick('моргни одним глазом')">подмигни</button><button class=chip onclick="quick('покажи сердечко')">сердце</button>
+        <button class=chip onclick="quick('какой статус')">статус</button><button class=chip onclick="quick('запусти музыку')">музыка</button>
+        <button class=chip onclick="quick('останови музыку')">стоп</button><button class=chip onclick="quick('покажи сети вай фай рядом')">WiFi</button>
+      </div>
+      <div id=thread class=thread><div class=note>Сообщения Simalee появятся здесь.</div></div>
+      <div class=composer><input id=say type=text placeholder="Сообщение роботу..." onkeydown="if(event.key==='Enter')sendChat()"><button title="Сказать дома" onclick=sendSay()>▶</button><button title="Отправить в чат" onclick=sendChat()>↗</button></div>
+    </div>
+  </section>
+
+  <section class=panel data-panel=notify>
+    <div class=grid>
+      <div class=card><div class=section-title><h2>Уведомления</h2><small id=pushCount>—</small></div>
+        <p class=note id=pushst>Проверка...</p><div class=diag id=pushdiag>диагностика...</div>
+        <div class=btns style="margin-top:10px"><button class="btn primary" onclick=enablePush()>Включить</button><button class="btn warm" onclick=testPush()>Тест</button></div>
+        <label class=note style="display:block;margin-top:12px">Иконка уведомлений</label><label class=filepick><input type=file id=iconf accept="image/*" onchange=uploadIcon()><span>Выбрать</span><em id=iconname>файл не выбран</em></label>
+      </div>
+      <div class=card><div class=section-title><h2>Облако</h2><small>Render</small></div>
+        <div class=row><span class=k>Подписок</span><span class=v id=subs>—</span></div>
+        <div class=row><span class=k>Последняя ошибка</span><span class=v id=pusherr>—</span></div>
+        <div class=row><span class=k>Очередь команд</span><span class=v id=pending>—</span></div>
+        <div class=row><span class=k>Связь</span><span class=v id=cloudage>—</span></div>
+      </div>
+    </div>
+  </section>
+</div><nav class=tabbar><button class=active data-tab=status onclick="nav('status')">Статус</button><button data-tab=controls onclick="nav('controls')">Пульт</button><button data-tab=chat onclick="nav('chat')">Связь</button><button data-tab=notify onclick="nav('notify')">Push</button></nav></div>
+<script>
+let KEY=localStorage.getItem('simkey')||'',LAST=0,seen={},touched=0,st={};
+document.body.dataset.theme=localStorage.getItem('simTheme')||'glass';
+function $(id){return document.getElementById(id)}
+function show(){$('login').style.display=KEY?'none':'grid';$('app').style.display=KEY?'block':'none'}
+function saveKey(){KEY=$('key').value.trim();localStorage.setItem('simkey',KEY);show();tick();poll();pushStatus();pushDiag()}
+function theme(v){document.body.dataset.theme=v;localStorage.setItem('simTheme',v);beep(620,.05)}
+function nav(p){document.querySelectorAll('.panel').forEach(x=>x.classList.toggle('active',x.dataset.panel===p));document.querySelectorAll('.tabbar button').forEach(x=>x.classList.toggle('active',x.dataset.tab===p));beep(740,.05)}
+function fmtUp(s){s=+s||0;let h=Math.floor(s/3600),m=Math.floor(s%3600/60);return h?h+'ч '+m+'м':m+'м'}
+function lv(id,v,suf=''){$(id).textContent=v+suf}
+function setp(k,v){fetch('/set_remote?key='+encodeURIComponent(KEY)+'&'+k+'='+encodeURIComponent(v));$('setnote').textContent=k+' = '+v;beep(820,.04)}
+function sv(id,lab,v,suf=''){if(v==null||v==='')return;let el=$(id);if(el&&el!==document.activeElement){el.value=v;$(lab).textContent=v+suf}}
+function tgset(id,v){let el=$(id);if(el)el.classList.toggle('on',v==1||v==='1'||v===true||v==='true')}
+function tg(id,k){let on=!$(id).classList.contains('on');$(id).classList.toggle('on',on);setp(k,on?1:0)}
+function tgMic(){let on=!$('micsw').classList.contains('on');$('micsw').classList.toggle('on',on);setp('micoff',on?0:1)}
+async function tick(){if(!KEY)return;try{let r=await fetch('/status_remote?key='+encodeURIComponent(KEY));if(r.status===403){localStorage.removeItem('simkey');KEY='';show();return}let d=await r.json();st=d;let on=d.age>=0&&d.age<14;$('online').innerHTML='<span class="dot '+(on?'ok':'')+'"></span><span>'+(on?'online':(d.age<0?'new':'offline'))+'</span>';$('mainState').textContent=on?(d.slp==='1'?'спит':'на связи'):'не на связи';$('mainSub').textContent=on?('последний пакет '+d.age+'с назад'):(d.age<0?'робот ещё не присылал статус':'молчание '+d.age+'с');$('subtitle').textContent=(d.speaker&&d.speaker!=='not recognized')?'говорит: '+d.speaker:'удалённая связь с роботом';
+val('t',d.t&&d.t!='-99'?d.t+' °C':'—');val('h',d.h&&d.h!='-99'?d.h+' %':'—');val('en',d.en!=null&&d.en!==''?d.en+' %':'—');val('bat',d.bat&&d.bat!='-1'?d.bat+' %':'от сети');val('ip',d.ip||'—');val('slp',d.slp==='1'?'спит':'бодрствует');val('up',fmtUp(d.up));val('spk',(d.speaker&&d.speaker!=='not recognized')?d.speaker:'—');val('pc',d.pconline==='true'||d.pconline==='1'?'online':(d.pcon==='true'||d.pcon==='1'?'нет ответа':'выкл'));val('aimodel',d.aimodel||'—');val('fw',d.fw||'—');val('rstate',d.ron==='1'?(d.rrelay==='1'?'включено':'выключено'):'нет связи');val('relayHint',d.ron==='1'?'модуль на связи':'нет связи');val('touch',d.touch==='1'?'есть':'—');val('touchState',d.touchsens?('сенсор '+d.touchsens+'%'):'—');val('sttms',ms(d.sttms));val('aims',ms(d.aims));val('ttsms',ms(d.ttsms));val('aifails',d.aifails||'0');val('pending',d.pending||0);val('cloudage',d.age>=0?d.age+'с':'—');
+if(Date.now()-touched>3500){sv('vol','volv',d.vol);sv('mic','micv',d.mic,'%');sv('bri','briv',d.bri,'%');sv('eglow','eglowv',d.eglow,'%');sv('obri','obriv',d.obri,'%');sv('clockbri','clockbriv',d.clockbri,'%');if(d.voice&&document.activeElement!==$('voice'))$('voice').value=d.voice;tgset('micsw',d.micon);tgset('gender',d.gender);tgset('chirp',d.chirp);tgset('adiag',d.adiag);tgset('touchreact',d.touchreact)}}catch(e){}}
+function val(id,v){let el=$(id);if(el)el.textContent=v}
+function ms(v){v=+v||0;return v?v+' мс':'—'}
+document.addEventListener('input',e=>{if(e.target.type==='range')touched=Date.now()},true);
+function add(m){if(seen[m.id])return;seen[m.id]=1;let th=$('thread'),hint=th.querySelector('.note');if(hint)hint.remove();let d=document.createElement('div');d.className='msg '+(m.from==='you'?'you':'rob');d.textContent=m.text;let tm=document.createElement('span');tm.className='tm';tm.textContent=new Date((m.t||Date.now()/1000)*1000).toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'});d.appendChild(tm);th.appendChild(d);th.scrollTop=th.scrollHeight}
+async function poll(){if(!KEY)return;try{let d=await(await fetch('/outbox_remote?key='+encodeURIComponent(KEY)+'&since='+LAST)).json();(d.msgs||[]).forEach(add);LAST=d.last||LAST}catch(e){}}
+async function sendChat(){let x=$('say').value.trim();if(!x)return;$('say').value='';add({id:'l'+Date.now(),from:'you',text:x,t:Date.now()/1000});await fetch('/chat_remote?key='+encodeURIComponent(KEY)+'&text='+encodeURIComponent(x));poll()}
+async function sendSay(){let x=$('say').value.trim();if(!x)return;$('say').value='';add({id:'s'+Date.now(),from:'you',text:'дома: '+x,t:Date.now()/1000});await fetch('/say_remote?key='+encodeURIComponent(KEY)+'&text='+encodeURIComponent(x))}
+function quick(x){$('say').value=x;sendChat()}
+if('serviceWorker'in navigator){navigator.serviceWorker.register('/sw.js').then(r=>r.update()).catch(e=>{let el=$('pushdiag');if(el)el.textContent='SW: '+e})}
+function urlB64(s){let p='='.repeat((4-s.length%4)%4);let b=atob((s+p).replace(/-/g,'+').replace(/_/g,'/'));return Uint8Array.from([...b].map(c=>c.charCodeAt(0)))}
+async function enablePush(){try{$('pushst').textContent='Проверяю...';if(!('serviceWorker'in navigator)){pushText('Нет serviceWorker');return}if(!('PushManager'in window)){pushText('Нет Web Push');return}let perm=await Notification.requestPermission();if(perm!=='granted'){pushText('Разрешение: '+perm);return}let reg=await Promise.race([navigator.serviceWorker.ready,new Promise((_,rej)=>setTimeout(()=>rej(new Error('service worker timeout')),8000))]);let pub=(await(await fetch('/vapid_public')).text()).trim();let sub=await reg.pushManager.getSubscription();if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlB64(pub)});let r=await fetch('/push_subscribe?key='+encodeURIComponent(KEY),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(sub)});await pushStatus();pushText(r.ok?'Уведомления включены':'Подписка не сохранилась')}catch(e){pushText('Ошибка: '+(e.message||e))}}
+function pushText(x){$('pushst').textContent=x}
+async function testPush(){try{let r=await(await fetch('/push?key='+encodeURIComponent(KEY)+'&title=Simalee&text='+encodeURIComponent('Тестовое уведомление'))).json();pushText(r.sent>0?'Отправлено: '+r.sent:(r.subs==0?'Нет подписки':'Не доставлено'));await pushStatus()}catch(e){pushText('Ошибка теста: '+e)}}
+async function uploadIcon(){let f=$('iconf').files[0];if(!f)return;$('iconname').textContent=f.name;try{let b=await f.arrayBuffer();let r=await fetch('/set_icon?key='+encodeURIComponent(KEY),{method:'POST',body:b});pushText(r.ok?'Иконка обновлена':'Не удалось загрузить')}catch(e){pushText('Ошибка иконки: '+e)}}
+async function pushStatus(){if(!KEY)return;try{let c=await(await fetch('/push_count?key='+encodeURIComponent(KEY))).json();val('subs',c.subs||0);val('pushCount',(c.subs||0)+' устр.');val('pusherr',c.err||'—');if(c.subs>0)pushText('Подписано устройств: '+c.subs)}catch(e){}}
+function pushDiag(){try{let sw=('serviceWorker'in navigator),pm=('PushManager'in window),perm=(window.Notification?Notification.permission:'нет'),inst=(matchMedia('(display-mode: standalone)').matches||navigator.standalone)?'да':'нет';$('pushdiag').textContent='SW '+(sw?'ok':'no')+' · Push '+(pm?'ok':'no')+' · '+perm+' · PWA '+inst}catch(e){}}
+let _ac;function beep(f=720,d=.05){try{_ac=_ac||new(window.AudioContext||window.webkitAudioContext)();let o=_ac.createOscillator(),g=_ac.createGain();o.type='sine';o.frequency.value=f;g.gain.value=.045;o.connect(g);g.connect(_ac.destination);let t=_ac.currentTime;o.start(t);g.gain.exponentialRampToValueAtTime(.0001,t+d);o.stop(t+d+.02)}catch(e){}}
+document.addEventListener('click',e=>{if(e.target.closest('button,.sw'))beep()},true);window.addEventListener('error',e=>{let d=$('pushdiag');if(d)d.textContent='JS: '+(e.message||e)});
+show();tick();poll();if(KEY){pushStatus();pushDiag()}setInterval(tick,3000);setInterval(poll,2500);
+</script></body></html>"""
 
 @app.get("/app", response_class=HTMLResponse)
 def app_page():
