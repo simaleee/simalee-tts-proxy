@@ -173,6 +173,46 @@ async def forecast(key: str = Query(...), lat: float = Query(45.33), lon: float 
     return {"city": "Светлоград", "days": days}
 
 
+@app.get("/briefing", response_class=PlainTextResponse)
+async def briefing(key: str = Query(...), lat: float = Query(45.33), lon: float = Query(42.86)):
+    """Morning briefing text: date + today's weather + top news headline. Composed server-side
+    so the robot gets one short string it can speak in a single TTS chunk."""
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    import datetime as _dt
+    # MSK time (UTC+3)
+    now = _dt.datetime.utcnow() + _dt.timedelta(hours=3)
+    months = ["января","февраля","марта","апреля","мая","июня","июля","августа","сентября","октября","ноября","декабря"]
+    wd = ["понедельник","вторник","среда","четверг","пятница","суббота","воскресенье"][now.weekday()]
+    date_str = f"{wd}, {now.day} {months[now.month-1]}"
+    parts = [f"Доброе утро. Сегодня {date_str}."]
+    # weather today
+    try:
+        wurl = (f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
+                "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+                "&forecast_days=1&timezone=auto")
+        async with httpx.AsyncClient(timeout=12) as c:
+            wd_j = (await c.get(wurl)).json()
+        daily = wd_j.get("daily", {})
+        wc = int((daily.get("weather_code") or [0])[0])
+        tx = round((daily.get("temperature_2m_max") or [0])[0])
+        tn = round((daily.get("temperature_2m_min") or [0])[0])
+        pp = int((daily.get("precipitation_probability_max") or [0])[0])
+        sky = WMO.get(wc, "облачно")
+        rain = " Возьми зонт." if (pp >= 55 or wc >= 51) else ""
+        parts.append(f"Погода в Светлограде: {sky}, от {tn} до {tx} градусов, осадки {pp} процентов.{rain}")
+    except Exception:
+        pass
+    # one news headline
+    try:
+        heads = await _heads(GEN_NEWS, 1)
+        if heads:
+            parts.append(f"В новостях: {heads[0]}.")
+    except Exception:
+        pass
+    return " ".join(parts)
+
+
 async def _heads(url: str, n: int):
     async with httpx.AsyncClient(timeout=12, follow_redirects=True,
                                  headers={"User-Agent": "Mozilla/5.0"}) as c:
@@ -1054,3 +1094,27 @@ async def news(key: str = Query(...), q: str = Query("", max_length=140), n: int
     except Exception:
         return "ERR новости недоступны"
     return (". ".join(heads) + ".") if heads else "Новостей не нашлось."
+
+
+# Curated list of popular Russian radio stations with stable stream URLs.
+# The ESP can't resolve some hostnames when a VPN poisons local DNS, so we expose the list +
+# IPs as a hint; the Audio lib connects to the https stream directly.
+RADIOS = [
+    {"id": "shanson",     "name": "Радио Шансон",     "url": "https://chanson.hostingradio.ru:8041/chanson128.mp3"},
+    {"id": "retro",       "name": "Ретро FM",          "url": "https://retro.hostingradio.ru/retro256.mp3"},
+    {"id": "rusradio",    "name": "Русское радио",     "url": "https://rusradio.hostingradio.ru/rusradio256.mp3"},
+    {"id": "avto",        "name": "Авторадио",          "url": "https://avtoradio.hostingradio.ru/;stream.mp3"},
+    {"id": "dacha",       "name": "Радио Дача",         "url": "https://radiodacha.hostingradio.ru/radiodacha256.mp3"},
+    {"id": "relax",       "name": "Relax FM",           "url": "https://icecast-relaxfm.cdnvideo.ru/relaxfm.mp3"},
+    {"id": "jazz",        "name": "Радио Джаз",         "url": "https://jazz.cdnvideo.ru/jazz64.mp3"},
+    {"id": "record",      "name": "Record Dance",       "url": "https://air.radiorecord.ru:8102/rr_320"},
+]
+
+
+@app.get("/radio")
+def radio(key: str = Query(...)):
+    """List of curated radio stations. ESP picks one and streams it via the Audio lib."""
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    return {"stations": RADIOS}
+
