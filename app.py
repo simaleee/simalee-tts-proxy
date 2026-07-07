@@ -144,6 +144,35 @@ async def weather(key: str = Query(...), lat: float = Query(45.33), lon: float =
     return ("RAIN " if rain else "OK ") + body
 
 
+@app.get("/forecast")
+async def forecast(key: str = Query(...), lat: float = Query(45.33), lon: float = Query(42.86)):
+    """3-day forecast proxied through the server (Open-Meteo is reachable from here even when
+    the robot's local DNS is poisoned by a VPN). Returns a compact JSON the ESP can parse cheaply:
+    [{"c":code,"n":tmin,"x":tmax}, ...] for today/tomorrow/day-after."""
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    url = (f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}"
+           "&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=3")
+    try:
+        async with httpx.AsyncClient(timeout=12) as c:
+            d = (await c.get(url)).json()
+    except Exception:
+        return {"error": "forecast unavailable"}
+    daily = d.get("daily", {})
+    codes = daily.get("weather_code") or []
+    tmax = daily.get("temperature_2m_max") or []
+    tmin = daily.get("temperature_2m_min") or []
+    days = []
+    for i in range(min(3, len(codes))):
+        days.append({
+            "c": int(codes[i]) if i < len(codes) else 0,
+            "x": round(tmax[i]) if i < len(tmax) else 0,
+            "n": round(tmin[i]) if i < len(tmin) else 0,
+            "t": WMO.get(int(codes[i]) if i < len(codes) else 0, "облачно"),
+        })
+    return {"city": "Светлоград", "days": days}
+
+
 async def _heads(url: str, n: int):
     async with httpx.AsyncClient(timeout=12, follow_redirects=True,
                                  headers={"User-Agent": "Mozilla/5.0"}) as c:
