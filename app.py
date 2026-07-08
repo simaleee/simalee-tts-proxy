@@ -1118,3 +1118,46 @@ def radio(key: str = Query(...)):
         raise HTTPException(status_code=403, detail="bad key")
     return {"stations": RADIOS}
 
+
+# Wit.ai speech-to-text token (same as the robot uses). The robot can't reach api.wit.ai
+# directly when a desktop VPN poisons local DNS, so it POSTs the raw PCM here and we relay it.
+WIT_TOKEN = os.getenv("WIT_TOKEN", "WR73WGVKL4IKCCWW3FGOLJ6IUNM4AEI7")
+
+
+@app.post("/stt", response_class=PlainTextResponse)
+async def stt(key: str = Query(...), request: Request = None):
+    """Speech-to-text relay: ESP32 POSTs raw 16kHz mono signed-16-bit PCM as the body.
+    We forward it to Wit.ai and return just the recognised text (or ERR on failure)."""
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    body = await request.body()
+    if not body or len(body) < 200:
+        return "ERR audio too short"
+    try:
+        async with httpx.AsyncClient(timeout=25) as c:
+            r = await c.post(
+                "https://api.wit.ai/speech?v=20230215",
+                content=body,
+                headers={
+                    "Authorization": f"Bearer {WIT_TOKEN}",
+                    "Content-Type": "audio/raw;encoding=signed-integer;bits=16;rate=16000;endian=little",
+                    "Connection": "close",
+                },
+            )
+    except Exception:
+        return "ERR wit unreachable"
+    if r.status_code != 200:
+        return f"ERR wit {r.status_code}"
+    # Wit returns a JSON line per utterance; take the last "text" field.
+    text = ""
+    for line in r.text.splitlines():
+        try:
+            import json as _json
+            obj = _json.loads(line)
+            if "text" in obj and obj["text"]:
+                text = obj["text"]
+        except Exception:
+            continue
+    return text.strip()
+
+
