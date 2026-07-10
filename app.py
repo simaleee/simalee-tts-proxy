@@ -1161,3 +1161,54 @@ async def stt(key: str = Query(...), request: Request = None):
     return text.strip()
 
 
+# Gemini speech-to-text: the robot POSTs raw 16kHz mono s16le PCM, we wrap it into a
+# WAV container, base64-encode it, and ask Gemini to transcribe. Far more accurate than
+# Wit.ai on Russian, and uses the SAME Gemini key the robot already has (no new signup).
+# The key travels in the x-goog-api-key header (rotated by the robot between its two keys).
+@app.post("/stt_gemini", response_class=PlainTextResponse)
+async def stt_gemini(key: str = Query(...), request: Request = None):
+    if key != PASSWORD:
+        raise HTTPException(status_code=403, detail="bad key")
+    body = await request.body()
+    if not body or len(body) < 400:
+        return "ERR audio too short"
+    gk = request.headers.get("x-goog-api-key", "")
+    if not gk:
+        return "ERR no api key"
+    # Wrap raw PCM (16kHz mono s16le) into a minimal WAV header so Gemini accepts it.
+    import struct as _struct
+    data_len = len(body)
+    wav = b"RIFF" + _struct.pack("<I", 36 + data_len) + b"WAVE"
+    wav += b"fmt " + _struct.pack("<IHHIIHH", 16, 1, 1, 16000, 16000 * 2, 2, 16)
+    wav += b"data" + _struct.pack("<I", data_len) + body
+    import base64 as _b64
+    import json as _json
+    b64 = _b64.b64encode(wav).decode()
+    payload = _json.dumps({
+        "contents": [{"parts": [
+            {"text": "Transcribe the Russian speech in this audio. Output ONLY the transcribed text, nothing else. If there is no clear speech, output nothing."},
+            {"inline_data": {"mime_type": "audio/wav", "data": b64}},
+        ]}],
+        "generationConfig": {"maxOutputTokens": 120, "temperature": 0},
+    }).encode()
+    models = ["gemini-2.0-flash", "gemini-flash-latest", "gemini-1.5-flash"]
+    for model in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        try:
+            async with httpx.AsyncClient(timeout=30) as c:
+                r = await c.post(url, headers={"x-goog-api-key": gk, "Content-Type": "application/json"}, content=payload)
+        except Exception:
+            continue
+        if r.status_code != 200:
+            # 429 quota -> try the next model; other errors -> give up
+            continue
+        try:
+            d = r.json()
+            txt = d["candidates"][0]["content"]["parts"][0]["text"]
+            txt = txt.strip().strip('"').strip()
+            return txt
+        except Exception:
+            return "ERR gemini parse"
+    return "ERR gemini no model"
+
+
