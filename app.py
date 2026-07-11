@@ -1191,24 +1191,33 @@ async def stt_gemini(key: str = Query(...), request: Request = None):
         ]}],
         "generationConfig": {"maxOutputTokens": 120, "temperature": 0},
     }).encode()
-    models = ["gemini-2.0-flash", "gemini-flash-latest", "gemini-1.5-flash"]
-    for model in models:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        try:
-            async with httpx.AsyncClient(timeout=30) as c:
-                r = await c.post(url, headers={"x-goog-api-key": gk, "Content-Type": "application/json"}, content=payload)
-        except Exception:
-            continue
-        if r.status_code != 200:
-            # 429 quota -> try the next model; other errors -> give up
-            continue
-        try:
-            d = r.json()
-            txt = d["candidates"][0]["content"]["parts"][0]["text"]
-            txt = txt.strip().strip('"').strip()
-            return txt
-        except Exception:
-            return "ERR gemini parse"
-    return "ERR gemini no model"
+    # Try the working models in order. gemini-3.1-flash-lite is the same one the chat uses
+    # (it handles audio + is on the free tier that's NOT exhausted). Also accept an optional
+    # second key header so the robot can rotate keys without a second round-trip.
+    keys = [gk]
+    gk2 = request.headers.get("x-goog-api-key2", "")
+    if gk2:
+        keys.append(gk2)
+    models = ["gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-2.0-flash", "gemini-flash-latest"]
+    last_code = 0
+    for key_try in keys:
+        for model in models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+            try:
+                async with httpx.AsyncClient(timeout=30) as c:
+                    r = await c.post(url, headers={"x-goog-api-key": key_try, "Content-Type": "application/json"}, content=payload)
+            except Exception:
+                continue
+            last_code = r.status_code
+            if r.status_code != 200:
+                continue   # 429 quota / 503 overload -> next model/key
+            try:
+                d = r.json()
+                txt = d["candidates"][0]["content"]["parts"][0]["text"]
+                txt = txt.strip().strip('"').strip()
+                return txt
+            except Exception:
+                return "ERR gemini parse"
+    return f"ERR gemini {last_code}"
 
 
